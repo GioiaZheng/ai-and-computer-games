@@ -18,6 +18,7 @@ dqn.py              Shared DQN components
 spread_iql.py       Independent Q-Learning
 spread_cql.py       Centralized Q-Learning
 spread_evaluate.py  Numerical and visual comparison
+wandb_ver.py        IQL/CQL training with Weights & Biases tracking
 checkpoints/        Generated model weights
 ```
 
@@ -37,3 +38,49 @@ python spread_evaluate.py
 ```
 
 Simple Spread returns negative distance-based team rewards. A value closer to zero is better.
+
+## Weights & Biases version
+
+`wandb_ver.py` keeps the original tutorial scripts unchanged and adds experiment
+configuration, live metrics, final evaluation, and model artifacts.
+
+- Platform: [wandb.ai](https://wandb.ai/)
+- Experiment logging documentation: [Log objects and media](https://docs.wandb.ai/models/track/log)
+- Model versioning documentation: [W&B Artifacts](https://docs.wandb.ai/models/artifacts)
+
+Log in once before using online mode:
+
+```bash
+wandb login
+```
+
+Train IQL or centralized Q-learning:
+
+```bash
+python wandb_ver.py --algorithm iql
+python wandb_ver.py --algorithm cql
+```
+
+Use offline mode when the classroom network is unavailable:
+
+```bash
+python wandb_ver.py --algorithm iql --wandb-mode offline
+wandb sync wandb/offline-run-*
+```
+
+Short smoke test without creating a W&B run:
+
+```bash
+python wandb_ver.py \
+  --algorithm cql \
+  --total-timesteps 200 \
+  --learning-starts 20 \
+  --batch-size 8 \
+  --buffer-size 500 \
+  --evaluation-games 5 \
+  --wandb-mode disabled
+```
+
+Tracked values include episode return, rolling 100-episode mean return,
+epsilon, DQN loss, replay-buffer size, evaluation mean and standard deviation,
+run configuration, and model checkpoints as W&B artifacts.
