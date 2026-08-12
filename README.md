@@ -16,7 +16,7 @@ This is an independent course-work repository, not a fork of the instructor repo
 ## Repository Layout
 
 ```text
-ai-for-computer-games/
+ai-and-computer-games/
 |-- projects/
 |   `-- boxing-dqn/               Atari Boxing DQN project
 |-- practicals/
