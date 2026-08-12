@@ -54,10 +54,12 @@ python spread_random.py
 python spread_iql.py
 python spread_cql.py
 python spread_evaluate.py
+python wandb_ver.py --algorithm iql --wandb-mode offline
 ```
 
 In this practical, `CQL` means **Centralized Q-Learning**, not Conservative
-Q-Learning.
+Q-Learning. The optional W&B entry point tracks training metrics, evaluation
+tables, configuration, system utilization, and model artifacts.
 
 ### Final Work
 
