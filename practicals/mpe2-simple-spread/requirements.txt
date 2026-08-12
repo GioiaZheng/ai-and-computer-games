@@ -3,3 +3,4 @@ numpy
 pygame-ce
 torch
 wandb
+weave

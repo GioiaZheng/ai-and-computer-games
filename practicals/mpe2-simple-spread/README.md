@@ -19,6 +19,7 @@ spread_iql.py       Independent Q-Learning
 spread_cql.py       Centralized Q-Learning
 spread_evaluate.py  Numerical and visual comparison
 wandb_ver.py        IQL/CQL training with Weights & Biases tracking
+weave_ver.py        Traced evaluation of trained IQL/CQL checkpoints
 checkpoints/        Generated model weights
 ```
 
@@ -84,3 +85,33 @@ python wandb_ver.py \
 Tracked values include episode return, rolling 100-episode mean return,
 epsilon, DQN loss, replay-buffer size, evaluation mean and standard deviation,
 run configuration, and model checkpoints as W&B artifacts.
+
+## W&B Weave traces
+
+`weave_ver.py` loads already trained checkpoints and traces the evaluation call
+tree. It does not retrain the policy or call a language model.
+
+- Weave documentation: [Track your own operations](https://weave-docs.wandb.ai/guides/integrations/groq/#track-your-own-ops)
+
+```bash
+python weave_ver.py --algorithm iql --episodes 5
+python weave_ver.py --algorithm cql --episodes 5
+```
+
+The default Weave project is `gioiazheng/ai-and-computer-games`. Override it
+when needed:
+
+```bash
+python weave_ver.py \
+  --algorithm cql \
+  --weave-project your-entity/your-project
+```
+
+Each parent `evaluate_policy` trace contains one child `evaluate_episode` trace
+per seed. A child trace returns the two observations, two actions, shared reward,
+and cumulative team return for each environment step. This makes one weak or
+surprising episode directly inspectable without logging every training step.
+
+The Quickstart LLM example is not required here. Weave can trace any Python
+function decorated with `@weave.op`; this practical traces RL evaluation code
+without calling Serverless Inference, OpenAI, or another language-model API.
