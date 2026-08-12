@@ -1,91 +1,82 @@
-# Atari Boxing DQN
+# AI and Computer Games
 
-PettingZoo Atari Boxing training project with a compact DQN baseline, Breakout practice code, and CUDA-ready setup notes.
+Course projects and practical work for the University of Eastern Finland course
+**Artificial Intelligence for Computer Games**.
 
-## Source Context
+## Course Source
 
-This repository is an independent project repository. The setup follows the instructor-provided course repository:
+The practical setup follows the instructor-provided repository:
 
-https://github.com/Hautamaki-lab/Summer-School-2026
+- [Hautamaki-lab/Summer-School-2026](https://github.com/Hautamaki-lab/Summer-School-2026)
+- [MARL IQL/CQL Tutorial](https://github.com/Hautamaki-lab/Summer-School-2026/blob/main/MARL-IQL-CQL-Tutorial.md)
+- [Farama Foundation/MPE2](https://github.com/Farama-Foundation/MPE2)
 
-It is not a fork of that repository.
+This is an independent course-work repository, not a fork of the instructor repository.
 
-Lecture notes, slides, notebooks, generated checkpoints, and local result files are intentionally excluded from version control.
-
-## Project Layout
+## Repository Layout
 
 ```text
-README.md                     Project overview and run commands
-requirements.txt              Python package list
-examples/boxing_random.py     Random PettingZoo Boxing rollout
-examples/breakout_random.py   Random Gymnasium Breakout rollout
-examples/dqn_simple.py        Small Breakout DQN practice script
-src/dqn_boxing.py             Boxing DQN training script
-src/play_dqn_boxing.py        Render a saved Boxing DQN checkpoint
+ai-for-computer-games/
+|-- projects/
+|   `-- boxing-dqn/               Atari Boxing DQN project
+|-- practicals/
+|   `-- mpe2-simple-spread/       Random, IQL, and centralized Q-learning
+|-- final-work/                   Cooperative MARL final assignment
+|-- notes/                        Local bilingual lecture notes
+|-- notebooks/                    Local course notebooks
+|-- materials/                    Local lecture PDFs and source material
+`-- README.md
 ```
 
-The root directory is kept for project metadata. Practice scripts live in `examples/`,
-and the Boxing training code lives in `src/`.
+The repository tracks project code and documentation. Lecture notes, notebooks,
+course materials, generated checkpoints, experiment results, and reports remain
+available locally but are excluded from version control.
 
-## Environment
+## Projects
 
-The project was tested in WSL with a conda environment named `pettingzoo`.
+### Atari Boxing DQN
 
 ```bash
-conda create --name pettingzoo python=3.12 pip -y
-conda activate pettingzoo
+cd projects/boxing-dqn
 pip install -r requirements.txt
-```
-
-For CUDA-enabled PyTorch on WSL:
-
-```bash
-pip install --index-url https://download.pytorch.org/whl/cu126 torch torchvision torchaudio
-```
-
-Quick CUDA check:
-
-```bash
-python -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
-```
-
-## Quick Checks
-
-Random Boxing rollout:
-
-```bash
 python examples/boxing_random.py
+python src/dqn_boxing.py --episodes 1 --max-steps 100
 ```
 
-Random Breakout rollout:
+See [projects/boxing-dqn/README.md](projects/boxing-dqn/README.md) for training,
+CUDA, and playback commands.
+
+### MPE2 Simple Spread
 
 ```bash
-python examples/breakout_random.py
+cd practicals/mpe2-simple-spread
+python spread_random.py
+python spread_iql.py
+python spread_cql.py
+python spread_evaluate.py
 ```
 
-Small Boxing DQN smoke test:
+In this practical, `CQL` means **Centralized Q-Learning**, not Conservative
+Q-Learning.
+
+### Final Work
 
 ```bash
-python src/dqn_boxing.py --episodes 1 --max-steps 100 --learning-starts 20 --batch-size 8 --replay-size 500 --target-update 50 --save-every 1
+cd final-work/code
+pip install -r requirements.txt
+python central_q_learning.py --episodes 8000 --seeds 5 --output-dir ../results
 ```
 
-Expected generated files:
+The final-work implementation trains a centralized tabular Q-learning agent in
+a cooperative two-agent gridworld and generates evaluation tables and plots.
+
+## Tested Environment
 
 ```text
-checkpoints/dqn_boxing.pt
-results/dqn_boxing_training.csv
-```
-
-These files are ignored by git.
-
-## Longer Run
-
-```bash
-python src/dqn_boxing.py --episodes 50 --max-steps 5000 --learning-starts 1000 --batch-size 32 --replay-size 5000 --target-update 1000 --save-every 10
-```
-
-After training:
-
-```bash
-python src/play_dqn_boxing.py --checkpoint checkpoints/dqn_boxing.pt --episodes 1
+Ubuntu via WSL
+Python 3.12.13
+PyTorch 2.13.0+cu126
+CUDA 12.6
+NVIDIA GeForce GTX 1650 Ti
+MPE2 1.1.0
 ```

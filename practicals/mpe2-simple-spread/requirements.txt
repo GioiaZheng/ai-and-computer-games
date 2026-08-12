@@ -1,0 +1,4 @@
+mpe2
+numpy
+pygame-ce
+torch
