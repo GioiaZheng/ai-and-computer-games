@@ -55,11 +55,13 @@ python spread_iql.py
 python spread_cql.py
 python spread_evaluate.py
 python wandb_ver.py --algorithm iql --wandb-mode offline
+python weave_ver.py --algorithm iql --episodes 5
 ```
 
 In this practical, `CQL` means **Centralized Q-Learning**, not Conservative
 Q-Learning. The optional W&B entry point tracks training metrics, evaluation
-tables, configuration, system utilization, and model artifacts.
+tables, configuration, system utilization, and model artifacts. The Weave entry
+point traces the call tree and trajectories of trained-policy evaluations.
 
 ### Final Work
 
