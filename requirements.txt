@@ -1,0 +1,10 @@
+ale-py
+autorom[accept-rom-license]
+gymnasium[atari]
+numpy
+pettingzoo[atari]
+pygame
+torch
+torchaudio
+torchvision
+tqdm
