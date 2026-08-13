@@ -1,22 +1,20 @@
+"""Render a trained Boxing agent / 可视化训练后的 Boxing 智能体。"""
+
 import argparse
 import random
 import time
-from collections import deque
 from pathlib import Path
 
-import numpy as np
 import torch
 from pettingzoo.atari import boxing_v2
 
-from dqn_boxing import DQN, TRAIN_AGENT, append_frame, preprocess_frame
+from dqn_boxing import DQN, TRAIN_AGENT, append_frame, select_action, stacked_initial_state
 
 
-def choose_action(policy_net, state, n_actions, epsilon, device):
-    if random.random() < epsilon:
-        return random.randrange(n_actions)
-    with torch.no_grad():
-        state_tensor = torch.as_tensor(state[None, ...], device=device)
-        return int(policy_net(state_tensor).argmax(dim=1).item())
+def resolve_device(requested):
+    if requested == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(requested)
 
 
 def play(args):
@@ -24,38 +22,60 @@ def play(args):
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    checkpoint = torch.load(checkpoint_path, map_location=args.device, weights_only=False)
+    device = resolve_device(args.device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     frame_stack = int(checkpoint["frame_stack"])
     n_actions = int(checkpoint["n_actions"])
 
-    device = torch.device(args.device)
     policy_net = DQN(frame_stack, n_actions).to(device)
     policy_net.load_state_dict(checkpoint["model_state_dict"])
     policy_net.eval()
 
+    opponent_net = DQN(frame_stack, n_actions).to(device)
+    opponent_state = checkpoint.get("opponent_state_dict", checkpoint["model_state_dict"])
+    opponent_net.load_state_dict(opponent_state)
+    opponent_net.eval()
+
     env = boxing_v2.parallel_env(render_mode="human")
+    rng = random.Random(args.seed)
 
     for episode in range(1, args.episodes + 1):
-        obs, _ = env.reset(seed=args.seed + episode)
-        frame = preprocess_frame(obs[TRAIN_AGENT])
-        frames = deque([frame.copy() for _ in range(frame_stack)], maxlen=frame_stack)
-        state = np.stack(frames, axis=0)
+        observations, _ = env.reset(seed=args.seed + episode)
+        states = {}
+        frame_queues = {}
+        for agent in env.agents:
+            states[agent], frame_queues[agent] = stacked_initial_state(
+                observations[agent], frame_stack
+            )
         total_reward = 0.0
 
         try:
-            while len(env.agents) > 0:
+            while env.agents:
                 actions = {}
                 for agent in env.agents:
                     if agent == TRAIN_AGENT:
-                        actions[agent] = choose_action(
-                            policy_net, state, n_actions, args.epsilon, device
+                        actions[agent] = select_action(
+                            policy_net,
+                            states[agent],
+                            args.epsilon,
+                            n_actions,
+                            device,
+                            rng,
+                        )
+                    elif args.opponent == "snapshot":
+                        actions[agent] = select_action(
+                            opponent_net,
+                            states[agent],
+                            args.opponent_epsilon,
+                            n_actions,
+                            device,
+                            rng,
                         )
                     else:
-                        actions[agent] = env.action_space(agent).sample()
+                        actions[agent] = rng.randrange(n_actions)
 
-                obs, rewards, terminations, truncations, _ = env.step(actions)
+                next_observations, rewards, terminations, truncations, _ = env.step(actions)
                 total_reward += float(rewards.get(TRAIN_AGENT, 0.0))
-
                 done = bool(
                     terminations.get(TRAIN_AGENT, False)
                     or truncations.get(TRAIN_AGENT, False)
@@ -63,27 +83,29 @@ def play(args):
                 )
                 if done:
                     break
-
-                state = append_frame(frames, obs[TRAIN_AGENT])
+                for agent in env.agents:
+                    states[agent] = append_frame(frame_queues[agent], next_observations[agent])
                 time.sleep(args.sleep)
 
         except KeyboardInterrupt:
-            print("Stopped by user.")
+            print("Stopped by user / 用户停止。")
             break
 
-        print(f"episode={episode} reward={total_reward:.2f}")
+        print(f"episode={episode} opponent={args.opponent} reward={total_reward:.2f}")
 
     env.close()
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Watch a trained DQN play Atari Boxing.")
-    parser.add_argument("--checkpoint", default="checkpoints/dqn_boxing.pt")
+    parser.add_argument("--checkpoint", default="checkpoints/day4_boxing_best.pt")
     parser.add_argument("--episodes", type=int, default=1)
-    parser.add_argument("--epsilon", type=float, default=0.05)
+    parser.add_argument("--opponent", choices=["random", "snapshot"], default="random")
+    parser.add_argument("--epsilon", type=float, default=0.0)
+    parser.add_argument("--opponent-epsilon", type=float, default=0.0)
     parser.add_argument("--sleep", type=float, default=1 / 60)
     parser.add_argument("--seed", type=int, default=1000)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     return parser.parse_args()
 
 

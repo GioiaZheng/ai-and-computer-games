@@ -1,3 +1,10 @@
+"""Train a reproducible Double-Dueling DQN agent for PettingZoo Atari Boxing.
+
+The implementation stays small enough for the summer-school project while
+adding the stability and evaluation mechanisms needed for a meaningful run.
+实现保持课堂项目可读性，同时补充稳定训练、对手课程和可重复评估。
+"""
+
 import argparse
 import csv
 import random
@@ -15,7 +22,7 @@ FRAME_SIZE = 84
 
 
 def preprocess_frame(observation):
-    """Convert an Atari RGB frame to a small grayscale uint8 frame."""
+    """Convert one RGB frame to an 84x84 grayscale uint8 frame / 灰度缩放。"""
     gray = (
         0.299 * observation[:, :, 0]
         + 0.587 * observation[:, :, 1]
@@ -27,18 +34,22 @@ def preprocess_frame(observation):
 
 
 def stacked_initial_state(observation, frame_stack):
+    """Repeat the first frame because no earlier motion history exists / 初始化帧栈。"""
     frame = preprocess_frame(observation)
     frames = deque([frame.copy() for _ in range(frame_stack)], maxlen=frame_stack)
     return np.stack(frames, axis=0), frames
 
 
 def append_frame(frames, observation):
+    """Append a frame and return the current stack / 加入新帧并返回状态。"""
     frames.append(preprocess_frame(observation))
     return np.stack(frames, axis=0)
 
 
 class ReplayBuffer:
-    def __init__(self, capacity, state_shape):
+    """Fixed-size CPU replay using compact uint8 states / CPU uint8 经验回放池。"""
+
+    def __init__(self, capacity, state_shape, seed=0):
         self.capacity = capacity
         self.states = np.empty((capacity, *state_shape), dtype=np.uint8)
         self.next_states = np.empty((capacity, *state_shape), dtype=np.uint8)
@@ -47,6 +58,7 @@ class ReplayBuffer:
         self.dones = np.empty((capacity,), dtype=np.float32)
         self.position = 0
         self.size = 0
+        self.rng = np.random.default_rng(seed)
 
     def __len__(self):
         return self.size
@@ -61,51 +73,62 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size, device):
-        idx = np.random.randint(0, self.size, size=batch_size)
-        states = torch.as_tensor(self.states[idx], device=device)
-        actions = torch.as_tensor(self.actions[idx], device=device)
-        rewards = torch.as_tensor(self.rewards[idx], device=device)
-        next_states = torch.as_tensor(self.next_states[idx], device=device)
-        dones = torch.as_tensor(self.dones[idx], device=device)
+        indices = self.rng.integers(0, self.size, size=batch_size)
+        # Replay stays on CPU; only the sampled mini-batch moves to the GPU.
+        # 回放池留在 CPU，只把本次 mini-batch 搬到 GPU。
+        states = torch.as_tensor(self.states[indices], device=device)
+        actions = torch.as_tensor(self.actions[indices], device=device)
+        rewards = torch.as_tensor(self.rewards[indices], device=device)
+        next_states = torch.as_tensor(self.next_states[indices], device=device)
+        dones = torch.as_tensor(self.dones[indices], device=device)
         return states, actions, rewards, next_states, dones
 
 
 class DQN(nn.Module):
+    """Dueling convolutional Q-network / Dueling 卷积 Q 网络。"""
+
     def __init__(self, frame_stack, n_actions):
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv2d(frame_stack, 16, kernel_size=8, stride=4),
+            nn.Conv2d(frame_stack, 32, kernel_size=8, stride=4),
             nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=4, stride=2),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),
             nn.ReLU(),
             nn.Flatten(),
         )
         with torch.no_grad():
             sample = torch.zeros(1, frame_stack, FRAME_SIZE, FRAME_SIZE)
             feature_dim = self.features(sample).shape[1]
-        self.head = nn.Sequential(
-            nn.Linear(feature_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, n_actions),
-        )
+
+        self.shared = nn.Sequential(nn.Linear(feature_dim, 512), nn.ReLU())
+        self.value_head = nn.Linear(512, 1)
+        self.advantage_head = nn.Linear(512, n_actions)
 
     def forward(self, x):
         x = x.float() / 255.0
-        return self.head(self.features(x))
+        hidden = self.shared(self.features(x))
+        value = self.value_head(hidden)
+        advantage = self.advantage_head(hidden)
+        # Q = V + centered advantage makes the decomposition identifiable.
+        # 减去动作优势均值，避免 V 与 A 可以任意平移的问题。
+        return value + advantage - advantage.mean(dim=1, keepdim=True)
 
 
 def linear_epsilon(step, start, end, decay_steps):
+    """Linearly anneal exploration / 线性衰减探索率。"""
     if decay_steps <= 0:
         return end
     progress = min(step / decay_steps, 1.0)
     return start + progress * (end - start)
 
 
-def select_action(policy_net, state, epsilon, n_actions, device):
-    if random.random() < epsilon:
-        return random.randrange(n_actions)
+def select_action(policy_net, state, epsilon, n_actions, device, rng=None):
+    """Select an epsilon-greedy action / epsilon-greedy 选动作。"""
+    rng = rng or random
+    if rng.random() < epsilon:
+        return rng.randrange(n_actions)
     with torch.no_grad():
         state_tensor = torch.as_tensor(state[None, ...], device=device)
         q_values = policy_net(state_tensor)
@@ -113,32 +136,62 @@ def select_action(policy_net, state, epsilon, n_actions, device):
 
 
 def optimize(policy_net, target_net, replay, optimizer, args, device):
+    """Run one Double-DQN update and return diagnostics / 一次 Double DQN 更新。"""
     if len(replay) < max(args.learning_starts, args.batch_size):
         return None
 
     states, actions, rewards, next_states, dones = replay.sample(args.batch_size, device)
-    q_values = policy_net(states).gather(1, actions[:, None]).squeeze(1)
+    predictions = policy_net(states).gather(1, actions[:, None]).squeeze(1)
 
     with torch.no_grad():
-        next_q_values = target_net(next_states).max(dim=1).values
-        targets = rewards + args.gamma * next_q_values * (1.0 - dones)
+        # Online network selects; target network evaluates / 在线网络选，目标网络估值。
+        next_actions = policy_net(next_states).argmax(dim=1, keepdim=True)
+        next_values = target_net(next_states).gather(1, next_actions).squeeze(1)
+        targets = rewards + args.gamma * next_values * (1.0 - dones)
 
-    loss = nn.functional.smooth_l1_loss(q_values, targets)
-    optimizer.zero_grad()
+    td_errors = targets - predictions
+    loss = nn.functional.smooth_l1_loss(predictions, targets)
+    optimizer.zero_grad(set_to_none=True)
     loss.backward()
-    nn.utils.clip_grad_norm_(policy_net.parameters(), args.grad_clip)
+    grad_norm = nn.utils.clip_grad_norm_(policy_net.parameters(), args.grad_clip)
     optimizer.step()
-    return float(loss.item())
+
+    return {
+        "loss": float(loss.item()),
+        "q_mean": float(predictions.detach().mean().item()),
+        "target_mean": float(targets.mean().item()),
+        "td_abs_mean": float(td_errors.abs().mean().item()),
+        "grad_norm": float(grad_norm.item()),
+    }
 
 
-def save_checkpoint(path, policy_net, optimizer, steps, episodes, args, n_actions):
+def save_checkpoint(
+    path,
+    policy_net,
+    target_net,
+    opponent_net,
+    optimizer,
+    steps,
+    episodes,
+    best_score,
+    opponent_ready,
+    args,
+    n_actions,
+):
+    """Save enough state to resume training / 保存可继续训练的完整状态。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
+            "format_version": 2,
+            "algorithm": "double-dueling-dqn",
             "model_state_dict": policy_net.state_dict(),
+            "target_state_dict": target_net.state_dict(),
+            "opponent_state_dict": opponent_net.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "steps": steps,
             "episodes": episodes,
+            "best_score": best_score,
+            "opponent_ready": opponent_ready,
             "frame_stack": args.frame_stack,
             "n_actions": n_actions,
             "args": vars(args),
@@ -147,7 +200,20 @@ def save_checkpoint(path, policy_net, optimizer, steps, episodes, args, n_action
     )
 
 
+def load_checkpoint(path, policy_net, target_net, opponent_net, optimizer, device):
+    """Restore a version-2 training checkpoint / 恢复 Day 4 checkpoint。"""
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    if checkpoint.get("format_version") != 2:
+        raise ValueError("The resume checkpoint predates the Day 4 architecture.")
+    policy_net.load_state_dict(checkpoint["model_state_dict"])
+    target_net.load_state_dict(checkpoint["target_state_dict"])
+    opponent_net.load_state_dict(checkpoint["opponent_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint
+
+
 def write_result(path, row):
+    """Append one stable-schema CSV row / 追加一行实验记录。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     exists = path.exists()
     with path.open("a", newline="", encoding="utf-8") as handle:
@@ -157,131 +223,438 @@ def write_result(path, row):
         writer.writerow(row)
 
 
+def choose_episode_opponent(args, opponent_ready, rng):
+    """Choose one stationary opponent for an episode / 每局固定一种对手。"""
+    if args.opponent == "random" or not opponent_ready:
+        return "random"
+    if args.opponent == "snapshot":
+        return "snapshot"
+    return "random" if rng.random() < args.random_opponent_prob else "snapshot"
+
+
+def opponent_action(kind, opponent_net, state, n_actions, args, device, rng):
+    if kind == "random":
+        return rng.randrange(n_actions)
+    return select_action(
+        opponent_net,
+        state,
+        args.opponent_epsilon,
+        n_actions,
+        device,
+        rng,
+    )
+
+
+def evaluate(policy_net, opponent_net, args, device, n_actions, opponent_kind, seed_base):
+    """Evaluate greedily on fixed seeds / 在固定种子上做贪心评估。"""
+    env = boxing_v2.parallel_env(render_mode=None)
+    returns = []
+    policy_net.eval()
+    opponent_net.eval()
+    rng = random.Random(seed_base + 99_999)
+
+    for episode_index in range(args.eval_episodes):
+        observations, _ = env.reset(seed=seed_base + episode_index)
+        states = {}
+        frame_queues = {}
+        for agent in env.agents:
+            states[agent], frame_queues[agent] = stacked_initial_state(
+                observations[agent], args.frame_stack
+            )
+
+        total_reward = 0.0
+        for _ in range(args.max_steps):
+            actions = {}
+            for agent in env.agents:
+                if agent == TRAIN_AGENT:
+                    actions[agent] = select_action(
+                        policy_net, states[agent], 0.0, n_actions, device, rng
+                    )
+                elif opponent_kind == "snapshot":
+                    actions[agent] = select_action(
+                        opponent_net,
+                        states[agent],
+                        args.eval_opponent_epsilon,
+                        n_actions,
+                        device,
+                        rng,
+                    )
+                else:
+                    actions[agent] = rng.randrange(n_actions)
+
+            next_observations, rewards, terminations, truncations, _ = env.step(actions)
+            total_reward += float(rewards.get(TRAIN_AGENT, 0.0))
+            done = bool(
+                terminations.get(TRAIN_AGENT, False)
+                or truncations.get(TRAIN_AGENT, False)
+                or TRAIN_AGENT not in env.agents
+            )
+            if done:
+                break
+            for agent in env.agents:
+                states[agent] = append_frame(frame_queues[agent], next_observations[agent])
+        returns.append(total_reward)
+
+    env.close()
+    policy_net.train()
+    values = np.asarray(returns, dtype=np.float32)
+    return float(values.mean()), float(values.std()), returns
+
+
+def maybe_init_wandb(args):
+    if args.wandb_mode == "disabled":
+        return None
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError("Install wandb or use --wandb-mode disabled.") from exc
+    return wandb.init(
+        project=args.wandb_project,
+        name=args.run_name,
+        mode=args.wandb_mode,
+        config=vars(args),
+    )
+
+
+def mean_metric(metrics, key):
+    values = [item[key] for item in metrics]
+    return float(np.mean(values)) if values else 0.0
+
+
 def train(args):
+    """Train, periodically evaluate, and save latest/best checkpoints / 训练主循环。"""
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
     torch.set_num_threads(args.threads)
 
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(args.device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA was requested but torch.cuda.is_available() is False.")
 
     env = boxing_v2.parallel_env(render_mode=None)
-    obs, _ = env.reset(seed=args.seed)
+    observations, _ = env.reset(seed=args.seed)
     n_actions = env.action_space(TRAIN_AGENT).n
-    state_shape = (args.frame_stack, FRAME_SIZE, FRAME_SIZE)
-
     policy_net = DQN(args.frame_stack, n_actions).to(device)
     target_net = DQN(args.frame_stack, n_actions).to(device)
+    opponent_net = DQN(args.frame_stack, n_actions).to(device)
     target_net.load_state_dict(policy_net.state_dict())
+    opponent_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
+    opponent_net.eval()
 
     optimizer = torch.optim.Adam(policy_net.parameters(), lr=args.lr)
-    replay = ReplayBuffer(args.replay_size, state_shape)
+    state_shape = (args.frame_stack, FRAME_SIZE, FRAME_SIZE)
+    replay = ReplayBuffer(args.replay_size, state_shape, seed=args.seed)
     checkpoint_path = Path(args.checkpoint)
+    best_checkpoint_path = Path(args.best_checkpoint)
     result_path = Path(args.results)
+    evaluation_path = Path(args.evaluation_results)
 
     total_steps = 0
-    print(f"Training {TRAIN_AGENT} with DQN against a random opponent.")
-    print(f"Device: {device}; actions: {n_actions}; replay size: {args.replay_size}")
+    start_episode = 1
+    best_score = -float("inf")
+    opponent_ready = False
+    if args.resume:
+        checkpoint = load_checkpoint(
+            Path(args.resume), policy_net, target_net, opponent_net, optimizer, device
+        )
+        total_steps = int(checkpoint["steps"])
+        start_episode = int(checkpoint["episodes"]) + 1
+        best_score = float(checkpoint.get("best_score", best_score))
+        opponent_ready = bool(checkpoint.get("opponent_ready", False))
 
-    for episode in range(1, args.episodes + 1):
-        obs, _ = env.reset(seed=args.seed + episode)
-        state, frames = stacked_initial_state(obs[TRAIN_AGENT], args.frame_stack)
+    rng = random.Random(args.seed + 17)
+    wandb_run = maybe_init_wandb(args)
+    print("Training first_0 with Double-Dueling DQN / 训练 Double-Dueling DQN")
+    print(f"device={device} actions={n_actions} opponent={args.opponent}")
+
+    for episode in range(start_episode, args.episodes + 1):
+        observations, _ = env.reset(seed=args.seed + episode)
+        states = {}
+        frame_queues = {}
+        for agent in env.agents:
+            states[agent], frame_queues[agent] = stacked_initial_state(
+                observations[agent], args.frame_stack
+            )
+
+        opponent_kind = choose_episode_opponent(args, opponent_ready, rng)
         episode_reward = 0.0
-        losses = []
+        update_metrics = []
+        epsilon = linear_epsilon(
+            total_steps, args.eps_start, args.eps_end, args.eps_decay_steps
+        )
 
         for episode_step in range(1, args.max_steps + 1):
-            epsilon = linear_epsilon(total_steps, args.eps_start, args.eps_end, args.eps_decay_steps)
-            action = select_action(policy_net, state, epsilon, n_actions, device)
-
+            epsilon = linear_epsilon(
+                total_steps, args.eps_start, args.eps_end, args.eps_decay_steps
+            )
             actions = {}
             for agent in env.agents:
                 if agent == TRAIN_AGENT:
-                    actions[agent] = action
+                    actions[agent] = select_action(
+                        policy_net, states[agent], epsilon, n_actions, device, rng
+                    )
                 else:
-                    actions[agent] = env.action_space(agent).sample()
+                    actions[agent] = opponent_action(
+                        opponent_kind,
+                        opponent_net,
+                        states[agent],
+                        n_actions,
+                        args,
+                        device,
+                        rng,
+                    )
 
-            next_obs, rewards, terminations, truncations, _ = env.step(actions)
-            reward = float(rewards.get(TRAIN_AGENT, 0.0))
+            next_observations, rewards, terminations, truncations, _ = env.step(actions)
+            raw_reward = float(rewards.get(TRAIN_AGENT, 0.0))
+            replay_reward = (
+                float(np.sign(raw_reward)) if args.reward_clip == "sign" else raw_reward
+            )
+            # A local --max-steps cutoff also ends this replay trajectory.
+            # 本地时间上限同样必须关闭 bootstrap，避免跨 reset 泄漏价值。
+            time_limit = episode_step >= args.max_steps
             done = bool(
                 terminations.get(TRAIN_AGENT, False)
                 or truncations.get(TRAIN_AGENT, False)
                 or TRAIN_AGENT not in env.agents
+                or time_limit
             )
-
-            if TRAIN_AGENT in next_obs:
-                next_state = append_frame(frames, next_obs[TRAIN_AGENT])
+            if TRAIN_AGENT in next_observations:
+                next_state = append_frame(
+                    frame_queues[TRAIN_AGENT], next_observations[TRAIN_AGENT]
+                )
             else:
-                next_state = state.copy()
+                next_state = states[TRAIN_AGENT].copy()
 
-            replay.push(state, action, reward, next_state, done)
-            state = next_state
-            episode_reward += reward
+            replay.push(
+                states[TRAIN_AGENT],
+                actions[TRAIN_AGENT],
+                replay_reward,
+                next_state,
+                done,
+            )
+            states[TRAIN_AGENT] = next_state
+            if not done:
+                for agent in env.agents:
+                    if agent != TRAIN_AGENT:
+                        states[agent] = append_frame(
+                            frame_queues[agent], next_observations[agent]
+                        )
+
+            episode_reward += raw_reward
             total_steps += 1
 
             if total_steps % args.train_freq == 0:
-                loss = optimize(policy_net, target_net, replay, optimizer, args, device)
-                if loss is not None:
-                    losses.append(loss)
+                metrics = optimize(
+                    policy_net, target_net, replay, optimizer, args, device
+                )
+                if metrics is not None:
+                    update_metrics.append(metrics)
 
             if total_steps % args.target_update == 0:
                 target_net.load_state_dict(policy_net.state_dict())
 
+            if total_steps >= args.opponent_learning_starts and (
+                total_steps % args.opponent_update == 0
+            ):
+                opponent_net.load_state_dict(policy_net.state_dict())
+                opponent_net.eval()
+                opponent_ready = True
+
             if done:
                 break
 
-        mean_loss = float(np.mean(losses)) if losses else 0.0
         row = {
             "episode": episode,
             "total_steps": total_steps,
             "episode_steps": episode_step,
+            "opponent": opponent_kind,
             "reward": round(episode_reward, 4),
-            "epsilon": round(epsilon, 4),
-            "mean_loss": round(mean_loss, 6),
+            "epsilon": round(epsilon, 6),
+            "loss": round(mean_metric(update_metrics, "loss"), 6),
+            "q_mean": round(mean_metric(update_metrics, "q_mean"), 6),
+            "target_mean": round(mean_metric(update_metrics, "target_mean"), 6),
+            "td_abs_mean": round(mean_metric(update_metrics, "td_abs_mean"), 6),
+            "grad_norm": round(mean_metric(update_metrics, "grad_norm"), 6),
             "replay_size": len(replay),
         }
         write_result(result_path, row)
         print(
-            f"episode={episode:04d} steps={episode_step:04d} "
-            f"reward={episode_reward:7.2f} eps={epsilon:.3f} loss={mean_loss:.5f}"
+            f"episode={episode:04d} steps={total_steps:07d} "
+            f"reward={episode_reward:7.2f} eps={epsilon:.3f} "
+            f"opponent={opponent_kind:8s} loss={row['loss']:.5f}"
         )
+        if wandb_run is not None:
+            training_log = {
+                f"train/{key}": value
+                for key, value in row.items()
+                if key != "opponent"
+            }
+            training_log["train/opponent_snapshot"] = int(
+                opponent_kind == "snapshot"
+            )
+            wandb_run.log(training_log, step=total_steps)
+
+        if episode % args.eval_every == 0:
+            random_mean, random_std, _ = evaluate(
+                policy_net,
+                opponent_net,
+                args,
+                device,
+                n_actions,
+                "random",
+                args.eval_seed,
+            )
+            snapshot_mean = float("nan")
+            snapshot_std = float("nan")
+            if opponent_ready:
+                snapshot_mean, snapshot_std, _ = evaluate(
+                    policy_net,
+                    opponent_net,
+                    args,
+                    device,
+                    n_actions,
+                    "snapshot",
+                    args.eval_seed,
+                )
+            score = random_mean if not opponent_ready else (random_mean + snapshot_mean) / 2
+            eval_row = {
+                "episode": episode,
+                "total_steps": total_steps,
+                "random_mean": round(random_mean, 4),
+                "random_std": round(random_std, 4),
+                "snapshot_mean": round(snapshot_mean, 4),
+                "snapshot_std": round(snapshot_std, 4),
+                "selection_score": round(score, 4),
+            }
+            write_result(evaluation_path, eval_row)
+            print(
+                f"evaluation random={random_mean:.2f}+/-{random_std:.2f} "
+                f"snapshot={snapshot_mean:.2f}+/-{snapshot_std:.2f}"
+            )
+            if wandb_run is not None:
+                evaluation_log = {
+                    f"eval/{key}": value for key, value in eval_row.items()
+                }
+                wandb_run.log(evaluation_log, step=total_steps)
+            if score > best_score:
+                best_score = score
+                save_checkpoint(
+                    best_checkpoint_path,
+                    policy_net,
+                    target_net,
+                    opponent_net,
+                    optimizer,
+                    total_steps,
+                    episode,
+                    best_score,
+                    opponent_ready,
+                    args,
+                    n_actions,
+                )
+                print(f"saved best checkpoint: {best_checkpoint_path}")
 
         if episode % args.save_every == 0:
-            save_checkpoint(checkpoint_path, policy_net, optimizer, total_steps, episode, args, n_actions)
-            print(f"saved checkpoint: {checkpoint_path}")
+            save_checkpoint(
+                checkpoint_path,
+                policy_net,
+                target_net,
+                opponent_net,
+                optimizer,
+                total_steps,
+                episode,
+                best_score,
+                opponent_ready,
+                args,
+                n_actions,
+            )
 
-    save_checkpoint(checkpoint_path, policy_net, optimizer, total_steps, args.episodes, args, n_actions)
+    save_checkpoint(
+        checkpoint_path,
+        policy_net,
+        target_net,
+        opponent_net,
+        optimizer,
+        total_steps,
+        args.episodes,
+        best_score,
+        opponent_ready,
+        args,
+        n_actions,
+    )
     env.close()
-    print(f"Training finished. Final checkpoint: {checkpoint_path}")
-    print(f"Results CSV: {result_path}")
+
+    if wandb_run is not None:
+        import wandb
+
+        artifact = wandb.Artifact("boxing-agent", type="model")
+        artifact.add_file(str(checkpoint_path))
+        if best_checkpoint_path.exists():
+            artifact.add_file(str(best_checkpoint_path), name="best_dqn_boxing.pt")
+        wandb_run.log_artifact(artifact)
+        wandb_run.finish()
+
+    print(f"Training finished / 训练完成: {checkpoint_path}")
+    print(f"Training CSV / 训练记录: {result_path}")
+    print(f"Evaluation CSV / 评估记录: {evaluation_path}")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Lightweight DQN baseline for PettingZoo Atari Boxing.")
-    parser.add_argument("--episodes", type=int, default=50)
+    parser = argparse.ArgumentParser(
+        description="Double-Dueling DQN with snapshot-opponent training for Atari Boxing."
+    )
+    parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--max-steps", type=int, default=5000)
-    parser.add_argument("--replay-size", type=int, default=5000)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--learning-starts", type=int, default=1000)
+    parser.add_argument("--replay-size", type=int, default=20000)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--learning-starts", type=int, default=2000)
     parser.add_argument("--train-freq", type=int, default=4)
-    parser.add_argument("--target-update", type=int, default=1000)
+    parser.add_argument("--target-update", type=int, default=2000)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=10.0)
     parser.add_argument("--eps-start", type=float, default=1.0)
-    parser.add_argument("--eps-end", type=float, default=0.1)
-    parser.add_argument("--eps-decay-steps", type=int, default=20000)
+    parser.add_argument("--eps-end", type=float, default=0.05)
+    parser.add_argument("--eps-decay-steps", type=int, default=100000)
     parser.add_argument("--frame-stack", type=int, default=4)
+    parser.add_argument("--reward-clip", choices=["none", "sign"], default="sign")
+    parser.add_argument(
+        "--opponent", choices=["random", "snapshot", "mixed"], default="mixed"
+    )
+    parser.add_argument("--random-opponent-prob", type=float, default=0.5)
+    parser.add_argument("--opponent-epsilon", type=float, default=0.05)
+    parser.add_argument("--opponent-learning-starts", type=int, default=10000)
+    parser.add_argument("--opponent-update", type=int, default=10000)
+    parser.add_argument("--eval-opponent-epsilon", type=float, default=0.0)
+    parser.add_argument("--eval-every", type=int, default=10)
+    parser.add_argument("--eval-episodes", type=int, default=10)
+    parser.add_argument("--eval-seed", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--save-every", type=int, default=10)
-    parser.add_argument("--checkpoint", default="checkpoints/dqn_boxing.pt")
-    parser.add_argument("--results", default="results/dqn_boxing_training.csv")
-    return parser.parse_args()
+    parser.add_argument("--checkpoint", default="checkpoints/day4_boxing_latest.pt")
+    parser.add_argument("--best-checkpoint", default="checkpoints/day4_boxing_best.pt")
+    parser.add_argument("--results", default="results/day4_boxing_training.csv")
+    parser.add_argument("--evaluation-results", default="results/day4_boxing_evaluation.csv")
+    parser.add_argument("--resume", default="")
+    parser.add_argument(
+        "--wandb-mode",
+        choices=["online", "offline", "disabled"],
+        default="disabled",
+    )
+    parser.add_argument("--wandb-project", default="ai-and-computer-games")
+    parser.add_argument("--run-name", default="day4-double-dueling-dqn")
+    args = parser.parse_args()
+    if not 0.0 <= args.random_opponent_prob <= 1.0:
+        parser.error("--random-opponent-prob must be between 0 and 1")
+    return args
 
 
 if __name__ == "__main__":
