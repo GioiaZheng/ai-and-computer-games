@@ -260,12 +260,16 @@ def choose_episode_opponent(args, opponent_ready, rng):
     return "random" if rng.random() < args.random_opponent_prob else "snapshot"
 
 
-def choose_training_agent(train_role, rng):
+def choose_training_agent(train_role, rng, episode=None):
     """Choose the controlled player for one episode / 每局选择一个训练角色。"""
     if train_role == "first":
         return TRAIN_AGENT
     if train_role == "second":
         return SECOND_AGENT
+    if train_role == "alternate":
+        if episode is None:
+            raise ValueError("episode is required when train_role='alternate'")
+        return PLAYER_AGENTS[episode % len(PLAYER_AGENTS)]
     return PLAYER_AGENTS[rng.randrange(len(PLAYER_AGENTS))]
 
 
@@ -433,8 +437,14 @@ def train(args):
         }
 
         opponent_kind = choose_episode_opponent(args, opponent_ready, rng)
-        learner_agent = choose_training_agent(args.train_role, rng)
+        learner_agent = choose_training_agent(args.train_role, rng, episode)
         episode_reward = 0.0
+        shaping_penalty_total = 0.0
+        previous_learner_action = None
+        repeated_action_steps = 0
+        max_repeated_action_steps = 0
+        no_reward_steps = 0
+        max_no_reward_steps = 0
         update_metrics = []
         epsilon = linear_epsilon(
             total_steps, args.eps_start, args.eps_end, args.eps_decay_steps
@@ -463,9 +473,42 @@ def train(args):
 
             next_observations, rewards, terminations, truncations, _ = env.step(actions)
             raw_reward = float(rewards.get(learner_agent, 0.0))
-            replay_reward = (
+            base_replay_reward = (
                 float(np.sign(raw_reward)) if args.reward_clip == "sign" else raw_reward
             )
+            learner_action = actions[learner_agent]
+            if learner_action == previous_learner_action:
+                repeated_action_steps += 1
+            else:
+                repeated_action_steps = 1
+                previous_learner_action = learner_action
+            max_repeated_action_steps = max(
+                max_repeated_action_steps, repeated_action_steps
+            )
+
+            if raw_reward == 0.0:
+                no_reward_steps += 1
+            else:
+                no_reward_steps = 0
+            max_no_reward_steps = max(max_no_reward_steps, no_reward_steps)
+
+            # Reward shaping is used only by the learner. The reported episode
+            # return remains the official environment score. A tiny penalty
+            # teaches the Q-network to leave deterministic standing/punching
+            # loops instead of exploiting a one-point lead until time expires.
+            repeat_penalty = (
+                args.repeat_action_penalty
+                if repeated_action_steps > args.repeat_action_threshold
+                else 0.0
+            )
+            inactivity_penalty = (
+                args.inactivity_penalty
+                if no_reward_steps > args.inactivity_threshold
+                else 0.0
+            )
+            step_shaping_penalty = repeat_penalty + inactivity_penalty
+            shaping_penalty_total += step_shaping_penalty
+            replay_reward = base_replay_reward - step_shaping_penalty
             # A local --max-steps cutoff also ends this replay trajectory.
             # 本地时间上限同样必须关闭 bootstrap，避免跨 reset 泄漏价值。
             time_limit = episode_step >= args.max_steps
@@ -523,6 +566,9 @@ def train(args):
             "learner_agent": learner_agent,
             "opponent": opponent_kind,
             "reward": round(episode_reward, 4),
+            "shaping_penalty": round(shaping_penalty_total, 4),
+            "max_action_repeat": max_repeated_action_steps,
+            "max_no_reward_steps": max_no_reward_steps,
             "epsilon": round(epsilon, 6),
             "loss": round(mean_metric(update_metrics, "loss"), 6),
             "q_mean": round(mean_metric(update_metrics, "q_mean"), 6),
@@ -536,7 +582,8 @@ def train(args):
             f"episode={episode:04d} steps={total_steps:07d} "
             f"reward={episode_reward:7.2f} eps={epsilon:.3f} "
             f"role={learner_agent:8s} opponent={opponent_kind:8s} "
-            f"loss={row['loss']:.5f}"
+            f"loss={row['loss']:.5f} shape=-{shaping_penalty_total:.2f} "
+            f"repeat={max_repeated_action_steps} idle={max_no_reward_steps}"
         )
         if wandb_run is not None:
             training_log = {
@@ -714,11 +761,25 @@ def parse_args():
     parser.add_argument("--frame-stack", type=int, default=4)
     parser.add_argument("--reward-clip", choices=["none", "sign"], default="sign")
     parser.add_argument(
+        "--repeat-action-penalty",
+        type=float,
+        default=0.0,
+        help="Replay-only penalty after repeating one action for too many steps.",
+    )
+    parser.add_argument("--repeat-action-threshold", type=int, default=12)
+    parser.add_argument(
+        "--inactivity-penalty",
+        type=float,
+        default=0.0,
+        help="Replay-only penalty after too many consecutive zero-reward steps.",
+    )
+    parser.add_argument("--inactivity-threshold", type=int, default=75)
+    parser.add_argument(
         "--opponent", choices=["random", "snapshot", "mixed"], default="mixed"
     )
     parser.add_argument(
         "--train-role",
-        choices=["first", "second", "random"],
+        choices=["first", "second", "random", "alternate"],
         default="first",
         help="Player role controlled by the learner in each training episode.",
     )
