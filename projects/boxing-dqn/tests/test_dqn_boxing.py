@@ -46,6 +46,8 @@ class BoxingDQNTests(unittest.TestCase):
         rng = random.Random(7)
         self.assertEqual(choose_training_agent("first", rng), "first_0")
         self.assertEqual(choose_training_agent("second", rng), "second_0")
+        self.assertEqual(choose_training_agent("alternate", rng, 2), "first_0")
+        self.assertEqual(choose_training_agent("alternate", rng, 3), "second_0")
         roles = {choose_training_agent("random", rng) for _ in range(20)}
         self.assertEqual(roles, {"first_0", "second_0"})
 
