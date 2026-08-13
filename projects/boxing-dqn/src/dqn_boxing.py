@@ -12,6 +12,7 @@ from collections import deque
 from pathlib import Path
 
 import numpy as np
+import supersuit as ss
 import torch
 from pettingzoo.atari import boxing_v2
 from torch import nn
@@ -21,6 +22,27 @@ TRAIN_AGENT = "first_0"
 SECOND_AGENT = "second_0"
 PLAYER_AGENTS = (TRAIN_AGENT, SECOND_AGENT)
 FRAME_SIZE = 84
+
+
+def create_environment(render_mode=None, frame_stack=4):
+    """Reproduce the instructor's tournament observation pipeline."""
+    env = boxing_v2.parallel_env(render_mode=render_mode)
+    env = ss.max_observation_v0(env, 2)
+    env = ss.frame_skip_v0(env, 4)
+    env = ss.clip_reward_v0(env, lower_bound=-1, upper_bound=1)
+    env = ss.color_reduction_v0(env, mode="B")
+    env = ss.resize_v1(env, x_size=FRAME_SIZE, y_size=FRAME_SIZE)
+    env = ss.frame_stack_v1(env, frame_stack)
+    env = ss.agent_indicator_v0(env, type_only=False)
+    return env
+
+
+def observation_to_state(observation):
+    """Convert official HWC uint8 observations to PyTorch CHW replay states."""
+    observation = np.asarray(observation, dtype=np.uint8)
+    if observation.ndim != 3 or observation.shape[:2] != (FRAME_SIZE, FRAME_SIZE):
+        raise ValueError(f"Unexpected wrapped observation shape: {observation.shape}")
+    return np.ascontiguousarray(observation.transpose(2, 0, 1))
 
 
 def preprocess_frame(observation):
@@ -184,7 +206,7 @@ def save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
-            "format_version": 2,
+            "format_version": 3,
             "algorithm": "double-dueling-dqn",
             "model_state_dict": policy_net.state_dict(),
             "target_state_dict": target_net.state_dict(),
@@ -195,6 +217,8 @@ def save_checkpoint(
             "best_score": best_score,
             "opponent_ready": opponent_ready,
             "frame_stack": args.frame_stack,
+            "input_channels": policy_net.features[0].in_channels,
+            "observation_pipeline": "instructor-supersuit-v1",
             "n_actions": n_actions,
             "args": vars(args),
         },
@@ -203,10 +227,12 @@ def save_checkpoint(
 
 
 def load_checkpoint(path, policy_net, target_net, opponent_net, optimizer, device):
-    """Restore a version-2 training checkpoint / 恢复 Day 4 checkpoint。"""
+    """Restore a version-3 official-pipeline checkpoint / 恢复官方输入 checkpoint。"""
     checkpoint = torch.load(path, map_location=device, weights_only=False)
-    if checkpoint.get("format_version") != 2:
-        raise ValueError("The resume checkpoint predates the Day 4 architecture.")
+    if checkpoint.get("format_version") != 3:
+        raise ValueError(
+            "The checkpoint does not use the instructor's six-channel pipeline."
+        )
     policy_net.load_state_dict(checkpoint["model_state_dict"])
     target_net.load_state_dict(checkpoint["target_state_dict"])
     opponent_net.load_state_dict(checkpoint["opponent_state_dict"])
@@ -267,7 +293,7 @@ def evaluate(
     controlled_agent=TRAIN_AGENT,
 ):
     """Evaluate greedily on fixed seeds / 在固定种子上做贪心评估。"""
-    env = boxing_v2.parallel_env(render_mode=None)
+    env = create_environment(render_mode=None, frame_stack=args.frame_stack)
     returns = []
     policy_net.eval()
     opponent_net.eval()
@@ -275,12 +301,9 @@ def evaluate(
 
     for episode_index in range(args.eval_episodes):
         observations, _ = env.reset(seed=seed_base + episode_index)
-        states = {}
-        frame_queues = {}
-        for agent in env.agents:
-            states[agent], frame_queues[agent] = stacked_initial_state(
-                observations[agent], args.frame_stack
-            )
+        states = {
+            agent: observation_to_state(observations[agent]) for agent in env.agents
+        }
 
         total_reward = 0.0
         for _ in range(args.max_steps):
@@ -312,7 +335,7 @@ def evaluate(
             if done:
                 break
             for agent in env.agents:
-                states[agent] = append_frame(frame_queues[agent], next_observations[agent])
+                states[agent] = observation_to_state(next_observations[agent])
         returns.append(total_reward)
 
     env.close()
@@ -357,19 +380,21 @@ def train(args):
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is False.")
 
-    env = boxing_v2.parallel_env(render_mode=None)
+    env = create_environment(render_mode=None, frame_stack=args.frame_stack)
     observations, _ = env.reset(seed=args.seed)
     n_actions = env.action_space(TRAIN_AGENT).n
-    policy_net = DQN(args.frame_stack, n_actions).to(device)
-    target_net = DQN(args.frame_stack, n_actions).to(device)
-    opponent_net = DQN(args.frame_stack, n_actions).to(device)
+    initial_state = observation_to_state(observations[TRAIN_AGENT])
+    input_channels = initial_state.shape[0]
+    policy_net = DQN(input_channels, n_actions).to(device)
+    target_net = DQN(input_channels, n_actions).to(device)
+    opponent_net = DQN(input_channels, n_actions).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     opponent_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
     opponent_net.eval()
 
     optimizer = torch.optim.Adam(policy_net.parameters(), lr=args.lr)
-    state_shape = (args.frame_stack, FRAME_SIZE, FRAME_SIZE)
+    state_shape = initial_state.shape
     replay = ReplayBuffer(args.replay_size, state_shape, seed=args.seed)
     checkpoint_path = Path(args.checkpoint)
     best_checkpoint_path = Path(args.best_checkpoint)
@@ -403,12 +428,9 @@ def train(args):
 
     for episode in range(start_episode, args.episodes + 1):
         observations, _ = env.reset(seed=args.seed + episode)
-        states = {}
-        frame_queues = {}
-        for agent in env.agents:
-            states[agent], frame_queues[agent] = stacked_initial_state(
-                observations[agent], args.frame_stack
-            )
+        states = {
+            agent: observation_to_state(observations[agent]) for agent in env.agents
+        }
 
         opponent_kind = choose_episode_opponent(args, opponent_ready, rng)
         learner_agent = choose_training_agent(args.train_role, rng)
@@ -454,9 +476,7 @@ def train(args):
                 or time_limit
             )
             if learner_agent in next_observations:
-                next_state = append_frame(
-                    frame_queues[learner_agent], next_observations[learner_agent]
-                )
+                next_state = observation_to_state(next_observations[learner_agent])
             else:
                 next_state = states[learner_agent].copy()
 
@@ -471,9 +491,7 @@ def train(args):
             if not done:
                 for agent in env.agents:
                     if agent != learner_agent:
-                        states[agent] = append_frame(
-                            frame_queues[agent], next_observations[agent]
-                        )
+                        states[agent] = observation_to_state(next_observations[agent])
 
             episode_reward += raw_reward
             total_steps += 1

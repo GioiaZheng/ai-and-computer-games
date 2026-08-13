@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from dqn_boxing import DQN, evaluate
+from dqn_boxing import DQN, PLAYER_AGENTS, evaluate
 
 
 def write_rows(path, rows):
@@ -41,13 +41,14 @@ def main(args):
         raise RuntimeError("CUDA was requested but torch.cuda.is_available() is False.")
 
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    if checkpoint.get("format_version") != 2:
-        raise ValueError("Expected a Day 4 format-version 2 checkpoint.")
+    if checkpoint.get("format_version") != 3:
+        raise ValueError("Expected an official-pipeline format-version 3 checkpoint.")
 
     args.frame_stack = int(checkpoint["frame_stack"])
     n_actions = int(checkpoint["n_actions"])
-    policy_net = DQN(args.frame_stack, n_actions).to(device)
-    opponent_net = DQN(args.frame_stack, n_actions).to(device)
+    input_channels = int(checkpoint["input_channels"])
+    policy_net = DQN(input_channels, n_actions).to(device)
+    opponent_net = DQN(input_channels, n_actions).to(device)
     policy_net.load_state_dict(checkpoint["model_state_dict"])
     opponent_net.load_state_dict(checkpoint["opponent_state_dict"])
     policy_net.eval()
@@ -58,21 +59,25 @@ def main(args):
     if checkpoint.get("opponent_ready", False):
         opponents.append("snapshot")
     for opponent in opponents:
-        _, _, returns = evaluate(
-            policy_net,
-            opponent_net,
-            args,
-            device,
-            n_actions,
-            opponent,
-            args.eval_seed,
-        )
-        row = summarize(opponent, returns)
-        rows.append(row)
-        print(
-            f"opponent={opponent:8s} mean={row['mean_return']:7.2f} "
-            f"std={row['std_return']:6.2f} win_rate={row['win_rate']:.2%}"
-        )
+        for controlled_agent in PLAYER_AGENTS:
+            _, _, returns = evaluate(
+                policy_net,
+                opponent_net,
+                args,
+                device,
+                n_actions,
+                opponent,
+                args.eval_seed,
+                controlled_agent,
+            )
+            row = summarize(opponent, returns)
+            row["role"] = controlled_agent
+            rows.append(row)
+            print(
+                f"opponent={opponent:8s} role={controlled_agent:8s} "
+                f"mean={row['mean_return']:7.2f} std={row['std_return']:6.2f} "
+                f"win_rate={row['win_rate']:.2%}"
+            )
 
     write_rows(Path(args.output), rows)
     print(f"Evaluation CSV / 评估结果: {args.output}")
