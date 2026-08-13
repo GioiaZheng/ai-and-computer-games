@@ -5,6 +5,11 @@ snapshot-opponent curriculum, fixed-seed evaluation, optional W&B tracking, and
 CUDA support. The same policy can collect experience from either player role,
 and model selection averages held-out results across both roles.
 
+The environment reproduces the instructor's tournament wrapper order exactly:
+max over two observations, four-frame action skipping, clipped rewards,
+grayscale conversion, 84x84 resize, four-frame stacking, and a two-channel
+agent indicator. The resulting observation is `uint8 (84, 84, 6)`.
+
 ## Source Context
 
 This project is part of the independent `ai-and-computer-games` course-work repository. The setup follows the instructor-provided course repository:
@@ -137,6 +142,7 @@ python src/play_dqn_boxing.py --checkpoint checkpoints/day4_boxing_best.pt --epi
 The learner combines:
 
 - 84x84 grayscale frame stacks;
+- the instructor's two-channel player-role indicator;
 - compact uint8 CPU replay;
 - a convolutional dueling value/advantage head;
 - Double-DQN targets;

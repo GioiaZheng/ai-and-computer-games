@@ -6,9 +6,14 @@ import time
 from pathlib import Path
 
 import torch
-from pettingzoo.atari import boxing_v2
 
-from dqn_boxing import DQN, TRAIN_AGENT, append_frame, select_action, stacked_initial_state
+from dqn_boxing import (
+    DQN,
+    TRAIN_AGENT,
+    create_environment,
+    observation_to_state,
+    select_action,
+)
 
 
 def resolve_device(requested):
@@ -24,29 +29,29 @@ def play(args):
 
     device = resolve_device(args.device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if checkpoint.get("format_version") != 3:
+        raise ValueError("Expected an official-pipeline format-version 3 checkpoint.")
     frame_stack = int(checkpoint["frame_stack"])
     n_actions = int(checkpoint["n_actions"])
+    input_channels = int(checkpoint["input_channels"])
 
-    policy_net = DQN(frame_stack, n_actions).to(device)
+    policy_net = DQN(input_channels, n_actions).to(device)
     policy_net.load_state_dict(checkpoint["model_state_dict"])
     policy_net.eval()
 
-    opponent_net = DQN(frame_stack, n_actions).to(device)
+    opponent_net = DQN(input_channels, n_actions).to(device)
     opponent_state = checkpoint.get("opponent_state_dict", checkpoint["model_state_dict"])
     opponent_net.load_state_dict(opponent_state)
     opponent_net.eval()
 
-    env = boxing_v2.parallel_env(render_mode="human")
+    env = create_environment(render_mode="human", frame_stack=frame_stack)
     rng = random.Random(args.seed)
 
     for episode in range(1, args.episodes + 1):
         observations, _ = env.reset(seed=args.seed + episode)
-        states = {}
-        frame_queues = {}
-        for agent in env.agents:
-            states[agent], frame_queues[agent] = stacked_initial_state(
-                observations[agent], frame_stack
-            )
+        states = {
+            agent: observation_to_state(observations[agent]) for agent in env.agents
+        }
         total_reward = 0.0
 
         try:
@@ -84,7 +89,7 @@ def play(args):
                 if done:
                     break
                 for agent in env.agents:
-                    states[agent] = append_frame(frame_queues[agent], next_observations[agent])
+                    states[agent] = observation_to_state(next_observations[agent])
                 time.sleep(args.sleep)
 
         except KeyboardInterrupt:

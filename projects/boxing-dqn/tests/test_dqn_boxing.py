@@ -15,16 +15,25 @@ from dqn_boxing import (  # noqa: E402
     ReplayBuffer,
     choose_training_agent,
     linear_epsilon,
+    observation_to_state,
     optimize,
 )
 
 
 class BoxingDQNTests(unittest.TestCase):
     def test_dueling_network_shape(self):
-        model = DQN(frame_stack=4, n_actions=18)
-        output = model(torch.zeros(2, 4, 84, 84, dtype=torch.uint8))
+        model = DQN(frame_stack=6, n_actions=18)
+        output = model(torch.zeros(2, 6, 84, 84, dtype=torch.uint8))
         self.assertEqual(tuple(output.shape), (2, 18))
         self.assertTrue(torch.isfinite(output).all())
+
+    def test_official_observation_conversion(self):
+        observation = np.zeros((84, 84, 6), dtype=np.uint8)
+        observation[..., 4] = 255
+        state = observation_to_state(observation)
+        self.assertEqual(state.shape, (6, 84, 84))
+        self.assertEqual(state.dtype, np.uint8)
+        self.assertTrue(np.all(state[4] == 255))
 
     def test_epsilon_schedule_endpoints(self):
         self.assertAlmostEqual(linear_epsilon(0, 1.0, 0.05, 100), 1.0)
@@ -42,12 +51,12 @@ class BoxingDQNTests(unittest.TestCase):
 
     def test_one_double_dqn_update(self):
         device = torch.device("cpu")
-        policy = DQN(4, 3).to(device)
-        target = DQN(4, 3).to(device)
+        policy = DQN(6, 3).to(device)
+        target = DQN(6, 3).to(device)
         target.load_state_dict(policy.state_dict())
         optimizer = torch.optim.Adam(policy.parameters(), lr=1e-4)
-        replay = ReplayBuffer(16, (4, 84, 84), seed=1)
-        state = np.zeros((4, 84, 84), dtype=np.uint8)
+        replay = ReplayBuffer(16, (6, 84, 84), seed=1)
+        state = np.zeros((6, 84, 84), dtype=np.uint8)
         for index in range(8):
             replay.push(state, index % 3, float(index % 2), state, index == 7)
         args = SimpleNamespace(learning_starts=1, batch_size=4, gamma=0.99, grad_clip=10.0)
