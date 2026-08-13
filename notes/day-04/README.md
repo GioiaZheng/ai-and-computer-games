@@ -260,3 +260,61 @@ superiority. More training, multiple seeds, and opponent-pool ablations are
 needed before making an algorithmic claim. / 工程链路已经跑通，但短预算没有证明
 稳定收敛；后五局反而更差，对冻结快照全为 0 代表僵局，不代表战胜对手。需要更长
 训练、多随机种子和 opponent-pool 消融实验后，才能判断方法是否真正有效。
+
+## 15. Tournament-eve continuation and final policy / 赛前续训与最终策略
+
+The episode-20 checkpoint was resumed for a longer run ending at episode 200
+and 500,000 total environment steps. W&B ran in offline mode, while checkpoints
+and CSV evidence stayed local. Periodic two-opponent selection scores were:
+
+第 20 局 checkpoint 随后继续训练到第 200 局，总计 500,000 个环境步。W&B
+使用 offline 模式，checkpoint 与 CSV 证据只保存在本地。每 20 局进行一次
+random/snapshot 双对手评估：
+
+| Episode | Step | Random mean | Snapshot mean | Selection score |
+|---:|---:|---:|---:|---:|
+| 40 | 100,000 | 0.6 | 0.0 | 0.3 |
+| 60 | 150,000 | -2.0 | 0.0 | -1.0 |
+| 80 | 200,000 | 1.2 | 0.0 | **0.6** |
+| 100 | 250,000 | -1.2 | 0.0 | -0.6 |
+| 120 | 300,000 | -0.4 | 0.0 | -0.2 |
+| 140 | 350,000 | -2.2 | 0.0 | -1.1 |
+| 160 | 400,000 | -0.6 | 0.0 | -0.3 |
+| 180 | 450,000 | 0.8 | 0.0 | 0.4 |
+| 200 | 500,000 | -5.0 | 0.0 | -2.5 |
+
+Episode 80 was the best checkpoint *inside the continuation run*, but the
+tournament package was selected by a stricter held-out comparison of episodes
+20, 40, and 80. Each candidate played the same 20 unseen seeds from both player
+positions. Define the role-balanced score as
+
+续训内部的最佳点是第 80 局，但 tournament 模型没有直接采用它。我们把第 20、
+40、80 局三个候选模型放在相同的 20 个未见种子上，并分别作为双方角色评估。
+角色平衡分数定义为
+
+\[
+S_{role}=\frac{\bar R_{first}+\bar R_{second}}{2}.
+\]
+
+| Candidate | First-player mean | Second-player mean | Role-balanced mean |
+|---|---:|---:|---:|
+| Episode 20 | -0.50 | -0.50 | **-0.50** |
+| Episode 40 | -0.80 | -0.75 | -0.775 |
+| Episode 80 | -1.70 | -0.15 | -0.925 |
+
+Episode 20 was retained because it had the best role-balanced held-out mean.
+The result is intentionally modest: longer training improved one narrow
+selection checkpoint but did not improve robust generalization. This is an
+example of why more environment steps do not guarantee a better final policy.
+
+最终保留第 20 局，因为它的跨角色 held-out 均值最好。这个结论不夸大效果：更长
+训练曾提高某个小型选模分数，却没有提高稳健泛化；训练步数更多不等于最终策略必然
+更强。两个角色收到的像素 observation 相同，部署 agent 也不能可靠地从画面判断自己
+是 `first_0` 还是 `second_0`，因此选择跨角色更稳健的模型比偏向单一角色更合理。
+
+The final tournament package keeps the instructor interface unchanged:
+`sample_agent/agent_template.py`, `sample_agent/__init__.py`, and
+`sample_agent/policy_weights.pt`. It performs CPU-only greedy inference, uses
+the exact training preprocessing and four-frame stack, and resets its temporal
+state when `get_action(None)` is called. / 最终提交包保持老师模板的类名、方法签名和
+目录结构不变，只在 `Agent` 内加载选定权重并执行 CPU greedy inference。
