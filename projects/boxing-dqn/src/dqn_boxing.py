@@ -18,6 +18,8 @@ from torch import nn
 
 
 TRAIN_AGENT = "first_0"
+SECOND_AGENT = "second_0"
+PLAYER_AGENTS = (TRAIN_AGENT, SECOND_AGENT)
 FRAME_SIZE = 84
 
 
@@ -232,6 +234,15 @@ def choose_episode_opponent(args, opponent_ready, rng):
     return "random" if rng.random() < args.random_opponent_prob else "snapshot"
 
 
+def choose_training_agent(train_role, rng):
+    """Choose the controlled player for one episode / 每局选择一个训练角色。"""
+    if train_role == "first":
+        return TRAIN_AGENT
+    if train_role == "second":
+        return SECOND_AGENT
+    return PLAYER_AGENTS[rng.randrange(len(PLAYER_AGENTS))]
+
+
 def opponent_action(kind, opponent_net, state, n_actions, args, device, rng):
     if kind == "random":
         return rng.randrange(n_actions)
@@ -245,7 +256,16 @@ def opponent_action(kind, opponent_net, state, n_actions, args, device, rng):
     )
 
 
-def evaluate(policy_net, opponent_net, args, device, n_actions, opponent_kind, seed_base):
+def evaluate(
+    policy_net,
+    opponent_net,
+    args,
+    device,
+    n_actions,
+    opponent_kind,
+    seed_base,
+    controlled_agent=TRAIN_AGENT,
+):
     """Evaluate greedily on fixed seeds / 在固定种子上做贪心评估。"""
     env = boxing_v2.parallel_env(render_mode=None)
     returns = []
@@ -266,7 +286,7 @@ def evaluate(policy_net, opponent_net, args, device, n_actions, opponent_kind, s
         for _ in range(args.max_steps):
             actions = {}
             for agent in env.agents:
-                if agent == TRAIN_AGENT:
+                if agent == controlled_agent:
                     actions[agent] = select_action(
                         policy_net, states[agent], 0.0, n_actions, device, rng
                     )
@@ -283,11 +303,11 @@ def evaluate(policy_net, opponent_net, args, device, n_actions, opponent_kind, s
                     actions[agent] = rng.randrange(n_actions)
 
             next_observations, rewards, terminations, truncations, _ = env.step(actions)
-            total_reward += float(rewards.get(TRAIN_AGENT, 0.0))
+            total_reward += float(rewards.get(controlled_agent, 0.0))
             done = bool(
-                terminations.get(TRAIN_AGENT, False)
-                or truncations.get(TRAIN_AGENT, False)
-                or TRAIN_AGENT not in env.agents
+                terminations.get(controlled_agent, False)
+                or truncations.get(controlled_agent, False)
+                or controlled_agent not in env.agents
             )
             if done:
                 break
@@ -368,11 +388,18 @@ def train(args):
         start_episode = int(checkpoint["episodes"]) + 1
         best_score = float(checkpoint.get("best_score", best_score))
         opponent_ready = bool(checkpoint.get("opponent_ready", False))
+        # The CLI learning rate intentionally controls fine-tuning after resume.
+        # 续训可显式降低学习率，避免被 checkpoint 中的旧 optimizer 值覆盖。
+        for parameter_group in optimizer.param_groups:
+            parameter_group["lr"] = args.lr
 
     rng = random.Random(args.seed + 17)
     wandb_run = maybe_init_wandb(args)
-    print("Training first_0 with Double-Dueling DQN / 训练 Double-Dueling DQN")
-    print(f"device={device} actions={n_actions} opponent={args.opponent}")
+    print("Training shared-role Double-Dueling DQN / 训练双角色共享策略")
+    print(
+        f"device={device} actions={n_actions} opponent={args.opponent} "
+        f"train_role={args.train_role}"
+    )
 
     for episode in range(start_episode, args.episodes + 1):
         observations, _ = env.reset(seed=args.seed + episode)
@@ -384,6 +411,7 @@ def train(args):
             )
 
         opponent_kind = choose_episode_opponent(args, opponent_ready, rng)
+        learner_agent = choose_training_agent(args.train_role, rng)
         episode_reward = 0.0
         update_metrics = []
         epsilon = linear_epsilon(
@@ -396,7 +424,7 @@ def train(args):
             )
             actions = {}
             for agent in env.agents:
-                if agent == TRAIN_AGENT:
+                if agent == learner_agent:
                     actions[agent] = select_action(
                         policy_net, states[agent], epsilon, n_actions, device, rng
                     )
@@ -412,7 +440,7 @@ def train(args):
                     )
 
             next_observations, rewards, terminations, truncations, _ = env.step(actions)
-            raw_reward = float(rewards.get(TRAIN_AGENT, 0.0))
+            raw_reward = float(rewards.get(learner_agent, 0.0))
             replay_reward = (
                 float(np.sign(raw_reward)) if args.reward_clip == "sign" else raw_reward
             )
@@ -420,29 +448,29 @@ def train(args):
             # 本地时间上限同样必须关闭 bootstrap，避免跨 reset 泄漏价值。
             time_limit = episode_step >= args.max_steps
             done = bool(
-                terminations.get(TRAIN_AGENT, False)
-                or truncations.get(TRAIN_AGENT, False)
-                or TRAIN_AGENT not in env.agents
+                terminations.get(learner_agent, False)
+                or truncations.get(learner_agent, False)
+                or learner_agent not in env.agents
                 or time_limit
             )
-            if TRAIN_AGENT in next_observations:
+            if learner_agent in next_observations:
                 next_state = append_frame(
-                    frame_queues[TRAIN_AGENT], next_observations[TRAIN_AGENT]
+                    frame_queues[learner_agent], next_observations[learner_agent]
                 )
             else:
-                next_state = states[TRAIN_AGENT].copy()
+                next_state = states[learner_agent].copy()
 
             replay.push(
-                states[TRAIN_AGENT],
-                actions[TRAIN_AGENT],
+                states[learner_agent],
+                actions[learner_agent],
                 replay_reward,
                 next_state,
                 done,
             )
-            states[TRAIN_AGENT] = next_state
+            states[learner_agent] = next_state
             if not done:
                 for agent in env.agents:
-                    if agent != TRAIN_AGENT:
+                    if agent != learner_agent:
                         states[agent] = append_frame(
                             frame_queues[agent], next_observations[agent]
                         )
@@ -474,6 +502,7 @@ def train(args):
             "episode": episode,
             "total_steps": total_steps,
             "episode_steps": episode_step,
+            "learner_agent": learner_agent,
             "opponent": opponent_kind,
             "reward": round(episode_reward, 4),
             "epsilon": round(epsilon, 6),
@@ -488,21 +517,23 @@ def train(args):
         print(
             f"episode={episode:04d} steps={total_steps:07d} "
             f"reward={episode_reward:7.2f} eps={epsilon:.3f} "
-            f"opponent={opponent_kind:8s} loss={row['loss']:.5f}"
+            f"role={learner_agent:8s} opponent={opponent_kind:8s} "
+            f"loss={row['loss']:.5f}"
         )
         if wandb_run is not None:
             training_log = {
                 f"train/{key}": value
                 for key, value in row.items()
-                if key != "opponent"
+                if key not in {"opponent", "learner_agent"}
             }
             training_log["train/opponent_snapshot"] = int(
                 opponent_kind == "snapshot"
             )
+            training_log["train/learner_second"] = int(learner_agent == SECOND_AGENT)
             wandb_run.log(training_log, step=total_steps)
 
         if episode % args.eval_every == 0:
-            random_mean, random_std, _ = evaluate(
+            random_first_mean, _, random_first_returns = evaluate(
                 policy_net,
                 opponent_net,
                 args,
@@ -510,11 +541,29 @@ def train(args):
                 n_actions,
                 "random",
                 args.eval_seed,
+                TRAIN_AGENT,
             )
+            random_second_mean, _, random_second_returns = evaluate(
+                policy_net,
+                opponent_net,
+                args,
+                device,
+                n_actions,
+                "random",
+                args.eval_seed,
+                SECOND_AGENT,
+            )
+            random_values = np.asarray(
+                random_first_returns + random_second_returns, dtype=np.float32
+            )
+            random_mean = float(random_values.mean())
+            random_std = float(random_values.std())
             snapshot_mean = float("nan")
             snapshot_std = float("nan")
+            snapshot_first_mean = float("nan")
+            snapshot_second_mean = float("nan")
             if opponent_ready:
-                snapshot_mean, snapshot_std, _ = evaluate(
+                snapshot_first_mean, _, snapshot_first_returns = evaluate(
                     policy_net,
                     opponent_net,
                     args,
@@ -522,21 +571,43 @@ def train(args):
                     n_actions,
                     "snapshot",
                     args.eval_seed,
+                    TRAIN_AGENT,
                 )
+                snapshot_second_mean, _, snapshot_second_returns = evaluate(
+                    policy_net,
+                    opponent_net,
+                    args,
+                    device,
+                    n_actions,
+                    "snapshot",
+                    args.eval_seed,
+                    SECOND_AGENT,
+                )
+                snapshot_values = np.asarray(
+                    snapshot_first_returns + snapshot_second_returns, dtype=np.float32
+                )
+                snapshot_mean = float(snapshot_values.mean())
+                snapshot_std = float(snapshot_values.std())
             score = random_mean if not opponent_ready else (random_mean + snapshot_mean) / 2
             eval_row = {
                 "episode": episode,
                 "total_steps": total_steps,
                 "random_mean": round(random_mean, 4),
                 "random_std": round(random_std, 4),
+                "random_first_mean": round(random_first_mean, 4),
+                "random_second_mean": round(random_second_mean, 4),
                 "snapshot_mean": round(snapshot_mean, 4),
                 "snapshot_std": round(snapshot_std, 4),
+                "snapshot_first_mean": round(snapshot_first_mean, 4),
+                "snapshot_second_mean": round(snapshot_second_mean, 4),
                 "selection_score": round(score, 4),
             }
             write_result(evaluation_path, eval_row)
             print(
                 f"evaluation random={random_mean:.2f}+/-{random_std:.2f} "
-                f"snapshot={snapshot_mean:.2f}+/-{snapshot_std:.2f}"
+                f"(first={random_first_mean:.2f}, second={random_second_mean:.2f}) "
+                f"snapshot={snapshot_mean:.2f}+/-{snapshot_std:.2f} "
+                f"(first={snapshot_first_mean:.2f}, second={snapshot_second_mean:.2f})"
             )
             if wandb_run is not None:
                 evaluation_log = {
@@ -626,6 +697,12 @@ def parse_args():
     parser.add_argument("--reward-clip", choices=["none", "sign"], default="sign")
     parser.add_argument(
         "--opponent", choices=["random", "snapshot", "mixed"], default="mixed"
+    )
+    parser.add_argument(
+        "--train-role",
+        choices=["first", "second", "random"],
+        default="first",
+        help="Player role controlled by the learner in each training episode.",
     )
     parser.add_argument("--random-opponent-prob", type=float, default=0.5)
     parser.add_argument("--opponent-epsilon", type=float, default=0.05)

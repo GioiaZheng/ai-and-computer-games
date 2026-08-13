@@ -10,7 +10,13 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from dqn_boxing import DQN, ReplayBuffer, linear_epsilon, optimize  # noqa: E402
+from dqn_boxing import (  # noqa: E402
+    DQN,
+    ReplayBuffer,
+    choose_training_agent,
+    linear_epsilon,
+    optimize,
+)
 
 
 class BoxingDQNTests(unittest.TestCase):
@@ -24,6 +30,15 @@ class BoxingDQNTests(unittest.TestCase):
         self.assertAlmostEqual(linear_epsilon(0, 1.0, 0.05, 100), 1.0)
         self.assertAlmostEqual(linear_epsilon(50, 1.0, 0.05, 100), 0.525)
         self.assertAlmostEqual(linear_epsilon(200, 1.0, 0.05, 100), 0.05)
+
+    def test_training_role_selection(self):
+        import random
+
+        rng = random.Random(7)
+        self.assertEqual(choose_training_agent("first", rng), "first_0")
+        self.assertEqual(choose_training_agent("second", rng), "second_0")
+        roles = {choose_training_agent("random", rng) for _ in range(20)}
+        self.assertEqual(roles, {"first_0", "second_0"})
 
     def test_one_double_dqn_update(self):
         device = torch.device("cpu")

@@ -2,7 +2,8 @@
 
 PettingZoo Atari Boxing project with a reproducible Double-Dueling DQN learner,
 snapshot-opponent curriculum, fixed-seed evaluation, optional W&B tracking, and
-CUDA support.
+CUDA support. The same policy can collect experience from either player role,
+and model selection averages held-out results across both roles.
 
 ## Source Context
 
@@ -98,6 +99,7 @@ python src/dqn_boxing.py \
   --episodes 200 \
   --device cuda \
   --opponent mixed \
+  --train-role random \
   --replay-size 20000 \
   --learning-starts 2000 \
   --eval-every 10 \
@@ -107,7 +109,10 @@ python src/dqn_boxing.py \
 
 The mixed curriculum uses random opponents for initial data collection and then
 mixes random play with a periodically frozen snapshot. One opponent is fixed
-for each episode to reduce within-episode non-stationarity.
+for each episode to reduce within-episode non-stationarity. With
+`--train-role random`, one learner role is also fixed per episode, while the
+shared Q-network learns from both `first_0` and `second_0`. Periodic evaluation
+reports both roles separately and uses their combined mean for model selection.
 
 Resume an interrupted run:
 
@@ -139,7 +144,8 @@ The learner combines:
 - a delayed target network;
 - linearly annealed epsilon-greedy exploration;
 - random and frozen snapshot opponents;
-- periodic fixed-seed evaluation and best-checkpoint selection.
+- random, first-only, or second-only learner-role sampling;
+- periodic two-role fixed-seed evaluation and best-checkpoint selection.
 
 Generated checkpoints, CSV results, W&B runs, course notes, and reports are
 excluded from version control. Training source code and tests are tracked.
