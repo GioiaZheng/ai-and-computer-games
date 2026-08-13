@@ -22,15 +22,19 @@ ai-and-computer-games/
 |-- practicals/
 |   `-- mpe2-simple-spread/       Random, IQL, and centralized Q-learning
 |-- final-work/                   Cooperative MARL final assignment
-|-- notes/                        Local bilingual lecture notes
-|-- notebooks/                    Local course notebooks
+|-- notes/                        Bilingual lecture notes and concept guides
+|-- notebooks/                    Course notebooks
 |-- materials/                    Local lecture PDFs and source material
 `-- README.md
 ```
 
-The repository tracks project code and documentation. Lecture notes, notebooks,
-course materials, generated checkpoints, experiment results, and reports remain
-available locally but are excluded from version control.
+This private repository tracks project code, bilingual lecture notes, and course
+notebooks. Raw course materials, generated checkpoints, experiment results,
+W&B runs, and local reports remain excluded from version control.
+
+The public tournament agent is maintained separately so the submission package
+can preserve the instructor-provided `sample_agent/` interface without carrying
+the course repository structure.
 
 ## Projects
 
