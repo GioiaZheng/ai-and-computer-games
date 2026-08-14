@@ -181,7 +181,7 @@ class BoxingOpponentEnv(gym.Env):
 
 def build_vector_environment(args):
     from stable_baselines3.common.monitor import Monitor
-    from stable_baselines3.common.vec_env import DummyVecEnv
+    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
     factories = []
     for rank in range(args.n_envs):
@@ -198,12 +198,20 @@ def build_vector_environment(args):
             )
 
         factories.append(make_env)
+    if args.vec_env == "subproc":
+        if args.external_probability > 0.0:
+            raise ValueError(
+                "Subprocess environments are restricted to random opponents; "
+                "use --vec-env dummy when external agents are enabled."
+            )
+        return SubprocVecEnv(factories, start_method=args.start_method)
     return DummyVecEnv(factories)
 
 
 def train(args):
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CheckpointCallback
+    from stable_baselines3.common.utils import FloatSchedule
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -221,6 +229,11 @@ def train(args):
     if args.resume:
         model = PPO.load(args.resume, env=env, device=args.device)
         model.verbose = 1
+        model.ent_coef = args.entropy_coefficient
+        model.learning_rate = args.learning_rate
+        model.lr_schedule = FloatSchedule(args.learning_rate)
+        for parameter_group in model.policy.optimizer.param_groups:
+            parameter_group["lr"] = args.learning_rate
     else:
         model = PPO(
             "CnnPolicy",
@@ -256,6 +269,12 @@ def parse_args():
     parser.add_argument("--curriculum-episodes", type=int, default=150)
     parser.add_argument("--timesteps", type=int, default=500_000)
     parser.add_argument("--n-envs", type=int, default=2)
+    parser.add_argument("--vec-env", choices=["dummy", "subproc"], default="dummy")
+    parser.add_argument(
+        "--start-method",
+        choices=["forkserver", "spawn"],
+        default="forkserver",
+    )
     parser.add_argument("--n-steps", type=int, default=1024)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--n-epochs", type=int, default=4)
