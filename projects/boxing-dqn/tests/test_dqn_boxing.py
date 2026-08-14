@@ -14,10 +14,12 @@ from dqn_boxing import (  # noqa: E402
     DQN,
     ReplayBuffer,
     choose_training_agent,
+    external_agent_action,
     linear_epsilon,
     normalized_action_entropy,
     observation_to_state,
     optimize,
+    state_to_observation,
 )
 
 
@@ -35,6 +37,26 @@ class BoxingDQNTests(unittest.TestCase):
         self.assertEqual(state.shape, (6, 84, 84))
         self.assertEqual(state.dtype, np.uint8)
         self.assertTrue(np.all(state[4] == 255))
+        reconstructed = state_to_observation(state)
+        self.assertEqual(reconstructed.shape, observation.shape)
+        self.assertTrue(np.array_equal(reconstructed, observation))
+
+    def test_external_agent_action_validation(self):
+        class ValidAgent:
+            def get_action(self, observation):
+                self.shape = observation.shape
+                return 17
+
+        class InvalidAgent:
+            def get_action(self, observation):
+                return 18
+
+        state = np.zeros((6, 84, 84), dtype=np.uint8)
+        valid = ValidAgent()
+        self.assertEqual(external_agent_action(valid, state, 18), 17)
+        self.assertEqual(valid.shape, (84, 84, 6))
+        with self.assertRaises(ValueError):
+            external_agent_action(InvalidAgent(), state, 18)
 
     def test_epsilon_schedule_endpoints(self):
         self.assertAlmostEqual(linear_epsilon(0, 1.0, 0.05, 100), 1.0)
