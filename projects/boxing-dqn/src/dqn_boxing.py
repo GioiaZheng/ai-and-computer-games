@@ -7,6 +7,7 @@ adding the stability and evaluation mechanisms needed for a meaningful run.
 
 import argparse
 import csv
+import importlib.util
 import math
 import random
 from collections import deque
@@ -44,6 +45,14 @@ def observation_to_state(observation):
     if observation.ndim != 3 or observation.shape[:2] != (FRAME_SIZE, FRAME_SIZE):
         raise ValueError(f"Unexpected wrapped observation shape: {observation.shape}")
     return np.ascontiguousarray(observation.transpose(2, 0, 1))
+
+
+def state_to_observation(state):
+    """Convert replay-format CHW state back to the official HWC observation."""
+    state = np.asarray(state, dtype=np.uint8)
+    if state.ndim != 3 or state.shape[1:] != (FRAME_SIZE, FRAME_SIZE):
+        raise ValueError(f"Unexpected replay state shape: {state.shape}")
+    return np.ascontiguousarray(state.transpose(1, 2, 0))
 
 
 def preprocess_frame(observation):
@@ -254,6 +263,8 @@ def write_result(path, row):
 
 def choose_episode_opponent(args, opponent_ready, rng):
     """Choose one stationary opponent for an episode / 每局固定一种对手。"""
+    if args.opponent == "external":
+        return "external"
     if args.opponent == "random" or not opponent_ready:
         return "random"
     if args.opponent == "snapshot":
@@ -274,9 +285,51 @@ def choose_training_agent(train_role, rng, episode=None):
     return PLAYER_AGENTS[rng.randrange(len(PLAYER_AGENTS))]
 
 
-def opponent_action(kind, opponent_net, state, n_actions, args, device, rng):
+def load_external_agent(path, env):
+    """Load an instructor-compatible Agent from a file or package directory."""
+    source = Path(path).expanduser().resolve()
+    if source.is_dir():
+        candidates = [source / "agent_template.py", source / "agent.py"]
+        source = next((candidate for candidate in candidates if candidate.exists()), None)
+        if source is None:
+            raise FileNotFoundError(
+                f"No agent_template.py or agent.py inside {Path(path)}"
+            )
+    if not source.is_file():
+        raise FileNotFoundError(f"External agent source not found: {source}")
+
+    spec = importlib.util.spec_from_file_location("boxing_external_opponent", source)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load external agent module: {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not hasattr(module, "Agent"):
+        raise AttributeError(f"{source} does not define Agent")
+    agent = module.Agent(env)
+    if not hasattr(agent, "get_action"):
+        raise AttributeError(f"Agent from {source} does not define get_action")
+    if hasattr(agent, "eval"):
+        agent.eval()
+    return agent
+
+
+def external_agent_action(agent, state, n_actions):
+    """Ask an external Agent for one validated action."""
+    action = int(agent.get_action(state_to_observation(state)))
+    if not 0 <= action < n_actions:
+        raise ValueError(f"External agent returned illegal action {action}")
+    return action
+
+
+def opponent_action(
+    kind, opponent_net, state, n_actions, args, device, rng, external_agent=None
+):
     if kind == "random":
         return rng.randrange(n_actions)
+    if kind == "external":
+        if external_agent is None:
+            raise ValueError("external_agent is required for external opponent")
+        return external_agent_action(external_agent, state, n_actions)
     return select_action(
         opponent_net,
         state,
@@ -448,6 +501,11 @@ def train(args):
         }
 
         opponent_kind = choose_episode_opponent(args, opponent_ready, rng)
+        external_agent = (
+            load_external_agent(args.external_opponent, env)
+            if opponent_kind == "external"
+            else None
+        )
         learner_agent = choose_training_agent(args.train_role, rng, episode)
         episode_reward = 0.0
         shaping_penalty_total = 0.0
@@ -481,6 +539,7 @@ def train(args):
                         args,
                         device,
                         rng,
+                        external_agent,
                     )
 
             next_observations, rewards, terminations, truncations, _ = env.step(actions)
@@ -793,7 +852,14 @@ def parse_args():
     )
     parser.add_argument("--inactivity-threshold", type=int, default=75)
     parser.add_argument(
-        "--opponent", choices=["random", "snapshot", "mixed"], default="mixed"
+        "--opponent",
+        choices=["random", "snapshot", "mixed", "external"],
+        default="mixed",
+    )
+    parser.add_argument(
+        "--external-opponent",
+        default="",
+        help="Path to a package directory or Python file defining Agent(env).",
     )
     parser.add_argument(
         "--train-role",
@@ -828,6 +894,8 @@ def parse_args():
     args = parser.parse_args()
     if not 0.0 <= args.random_opponent_prob <= 1.0:
         parser.error("--random-opponent-prob must be between 0 and 1")
+    if args.opponent == "external" and not args.external_opponent:
+        parser.error("--external-opponent is required when --opponent external")
     return args
 
 
