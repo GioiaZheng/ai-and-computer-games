@@ -29,6 +29,9 @@ examples/boxing_random.py     Random PettingZoo Boxing rollout
 examples/breakout_random.py   Random Gymnasium Breakout rollout
 examples/dqn_simple.py        Small Breakout DQN practice script
 src/dqn_boxing.py             Boxing DQN training script
+src/ppo_boxing.py             PPO curriculum trainer for frozen opponents
+src/export_ppo_policy.py      Convert an SB3 policy to submission weights
+src/ppo_agent_template.py     Teacher-compatible PPO inference template
 src/evaluate_boxing.py        Fixed-seed random/snapshot evaluation
 src/play_dqn_boxing.py        Render a saved Boxing DQN checkpoint
 tests/test_dqn_boxing.py      CPU architecture and update smoke tests
@@ -135,6 +138,49 @@ Watch the agent after training:
 
 ```bash
 python src/play_dqn_boxing.py --checkpoint checkpoints/day4_boxing_best.pt --episodes 1
+```
+
+## Isolated PPO Challenger
+
+PPO experiments use a separate environment so that adding SB3 does not modify
+the tournament-tested `pettingzoo` environment:
+
+```bash
+conda create --name boxing-ppo --clone pettingzoo -y
+conda activate boxing-ppo
+pip install stable-baselines3==2.9.0
+```
+
+The PPO wrapper keeps the instructor's environment pipeline unchanged. It
+randomizes the learner's side each episode and gradually replaces random
+opponents with teacher-compatible frozen agents:
+
+```bash
+python src/ppo_boxing.py \
+  --external-opponent /path/to/first_agent \
+  --external-opponent /path/to/second_agent \
+  --timesteps 300000 \
+  --n-envs 4 \
+  --device cuda \
+  --output checkpoints/ppo_boxing
+```
+
+Exporting produces a plain PyTorch state dict. The submission itself does not
+import SB3:
+
+```bash
+python src/export_ppo_policy.py \
+  checkpoints/ppo_boxing.zip \
+  checkpoints/ppo_policy_weights.pt
+```
+
+Resume with an additional number of timesteps:
+
+```bash
+python src/ppo_boxing.py \
+  --resume checkpoints/ppo_pool_100000_steps.zip \
+  --timesteps 200000 \
+  --output checkpoints/ppo_pool_300000
 ```
 
 ## Algorithm
