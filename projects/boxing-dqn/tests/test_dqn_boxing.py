@@ -15,6 +15,7 @@ from dqn_boxing import (  # noqa: E402
     ReplayBuffer,
     choose_training_agent,
     linear_epsilon,
+    normalized_action_entropy,
     observation_to_state,
     optimize,
 )
@@ -39,6 +40,16 @@ class BoxingDQNTests(unittest.TestCase):
         self.assertAlmostEqual(linear_epsilon(0, 1.0, 0.05, 100), 1.0)
         self.assertAlmostEqual(linear_epsilon(50, 1.0, 0.05, 100), 0.525)
         self.assertAlmostEqual(linear_epsilon(200, 1.0, 0.05, 100), 0.05)
+
+    def test_action_entropy_reports_coverage_evenness(self):
+        uniform = np.ones(18, dtype=np.int64)
+        collapsed = np.zeros(18, dtype=np.int64)
+        collapsed[0] = 100
+        self.assertAlmostEqual(normalized_action_entropy(uniform), 1.0)
+        self.assertAlmostEqual(normalized_action_entropy(collapsed), 0.0)
+        self.assertAlmostEqual(
+            normalized_action_entropy(np.zeros(18, dtype=np.int64)), 0.0
+        )
 
     def test_training_role_selection(self):
         import random
