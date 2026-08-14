@@ -57,4 +57,6 @@ class Agent(nn.Module):
         tensor = torch.as_tensor(observation, device=self.device).unsqueeze(0)
         with torch.inference_mode():
             logits = self.policy(tensor)
-        return int(logits.argmax(dim=1).item())
+            probabilities = torch.softmax(logits, dim=1)
+            action = torch.multinomial(probabilities, num_samples=1)
+        return int(action.item())
