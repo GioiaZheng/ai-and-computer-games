@@ -7,6 +7,7 @@ adding the stability and evaluation mechanisms needed for a meaningful run.
 
 import argparse
 import csv
+import math
 import random
 from collections import deque
 from pathlib import Path
@@ -368,6 +369,16 @@ def mean_metric(metrics, key):
     return float(np.mean(values)) if values else 0.0
 
 
+def normalized_action_entropy(action_counts):
+    """Return 0..1 action diversity without rewarding unused actions."""
+    total = int(action_counts.sum())
+    if total == 0 or len(action_counts) <= 1:
+        return 0.0
+    probabilities = action_counts[action_counts > 0] / total
+    entropy = -float(np.sum(probabilities * np.log(probabilities)))
+    return entropy / math.log(len(action_counts))
+
+
 def train(args):
     """Train, periodically evaluate, and save latest/best checkpoints / 训练主循环。"""
     random.seed(args.seed)
@@ -446,6 +457,7 @@ def train(args):
         no_reward_steps = 0
         max_no_reward_steps = 0
         update_metrics = []
+        action_counts = np.zeros(n_actions, dtype=np.int64)
         epsilon = linear_epsilon(
             total_steps, args.eps_start, args.eps_end, args.eps_decay_steps
         )
@@ -477,6 +489,7 @@ def train(args):
                 float(np.sign(raw_reward)) if args.reward_clip == "sign" else raw_reward
             )
             learner_action = actions[learner_agent]
+            action_counts[learner_action] += 1
             if learner_action == previous_learner_action:
                 repeated_action_steps += 1
             else:
@@ -576,6 +589,9 @@ def train(args):
             "td_abs_mean": round(mean_metric(update_metrics, "td_abs_mean"), 6),
             "grad_norm": round(mean_metric(update_metrics, "grad_norm"), 6),
             "replay_size": len(replay),
+            "actions_used": int(np.count_nonzero(action_counts)),
+            "min_action_count": int(action_counts.min()),
+            "action_entropy": round(normalized_action_entropy(action_counts), 6),
         }
         write_result(result_path, row)
         print(
@@ -583,7 +599,9 @@ def train(args):
             f"reward={episode_reward:7.2f} eps={epsilon:.3f} "
             f"role={learner_agent:8s} opponent={opponent_kind:8s} "
             f"loss={row['loss']:.5f} shape=-{shaping_penalty_total:.2f} "
-            f"repeat={max_repeated_action_steps} idle={max_no_reward_steps}"
+            f"repeat={max_repeated_action_steps} idle={max_no_reward_steps} "
+            f"actions={row['actions_used']}/{n_actions} "
+            f"entropy={row['action_entropy']:.3f}"
         )
         if wandb_run is not None:
             training_log = {
