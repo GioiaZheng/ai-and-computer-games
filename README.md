@@ -20,7 +20,8 @@ ai-and-computer-games/
 |-- projects/
 |   |-- boxing-dqn/               Atari Boxing training project
 |   |-- boxing-agent/             Final Boxing tournament agent
-|   `-- combat-tank-agent/        Combat Tank training and final agent
+|   |-- combat-tank-agent/        Combat Tank training and final agent
+|   `-- pommerman-agent/          Pommerman BC and PPO training project
 |-- practicals/
 |   `-- mpe2-simple-spread/       Random, IQL, and centralized Q-learning
 |-- final-work/                   Cooperative MARL final assignment
@@ -71,6 +72,21 @@ python -m pytest -q
 See [projects/combat-tank-agent/README.md](projects/combat-tank-agent/README.md)
 for training and evaluation commands. The evaluator-compatible files are in
 `projects/combat-tank-agent/submission/`.
+
+### Pommerman FFA
+
+The Pommerman extension uses the official Apache-2.0 Playground environment and
+an original PyTorch pipeline: behavioral cloning from `SimpleAgent`, followed
+by shared-policy PPO training across all four FFA spawn positions.
+
+```bash
+cd projects/pommerman-agent
+bash scripts/setup_wsl.sh
+bash scripts/train_quickstart.sh
+```
+
+See [projects/pommerman-agent/README.md](projects/pommerman-agent/README.md) for
+environment compatibility, attribution, training, and evaluation details.
 
 ### MPE2 Simple Spread
 
