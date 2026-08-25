@@ -28,3 +28,6 @@ reports/
 *.pptx
 *.docx
 *.zip
+
+# Team-authored final report included with the Combat Tank project.
+!projects/combat-tank-agent/report/Ali0x01_combat_tank_report.pdf

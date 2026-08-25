@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.zip
+.venv/
+venv/
+.env
+*.pt
+*.pth
+*.ckpt
+!sample_agent/policy_weights.pt
+wandb/
+results/
+checkpoints/

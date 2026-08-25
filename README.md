@@ -18,7 +18,9 @@ This is an independent course-work repository, not a fork of the instructor repo
 ```text
 ai-and-computer-games/
 |-- projects/
-|   `-- boxing-dqn/               Atari Boxing DQN project
+|   |-- boxing-dqn/               Atari Boxing training project
+|   |-- boxing-agent/             Final Boxing tournament agent
+|   `-- combat-tank-agent/        Combat Tank training and final agent
 |-- practicals/
 |   `-- mpe2-simple-spread/       Random, IQL, and centralized Q-learning
 |-- final-work/                   Cooperative MARL final assignment
@@ -28,13 +30,10 @@ ai-and-computer-games/
 `-- README.md
 ```
 
-This private repository tracks project code, bilingual lecture notes, and course
-notebooks. Raw course materials, generated checkpoints, experiment results,
-W&B runs, and local reports remain excluded from version control.
-
-The public tournament agent is maintained separately so the submission package
-can preserve the instructor-provided `sample_agent/` interface without carrying
-the course repository structure.
+This private repository tracks project code, bilingual lecture notes, course
+notebooks, both tournament agents, and the team-authored Combat Tank report.
+Raw course materials, intermediate checkpoints, experiment results, W&B runs,
+and third-party agents remain excluded from version control.
 
 ## Projects
 
@@ -49,6 +48,29 @@ python src/dqn_boxing.py --episodes 1 --max-steps 100
 
 See [projects/boxing-dqn/README.md](projects/boxing-dqn/README.md) for training,
 CUDA, and playback commands.
+
+The exact submitted Boxing policy, trained checkpoint, method notes, and smoke
+tests are preserved under
+[projects/boxing-agent](projects/boxing-agent). This Double-Dueling DQN agent
+placed fourth in the course tournament.
+
+### Atari Combat Tank
+
+The final project uses the unchanged instructor configuration with a visible
+maze, no invisibility, and no billiard-style bullet rebounds. The repository
+contains behavioral-cloning utilities, exploration and combat curricula,
+official-pipeline PPO training, two-role evaluation, the final report, and the
+role-specialized tournament submission:
+
+```bash
+cd projects/combat-tank-agent
+pip install -r requirements.txt
+python -m pytest -q
+```
+
+See [projects/combat-tank-agent/README.md](projects/combat-tank-agent/README.md)
+for training and evaluation commands. The evaluator-compatible files are in
+`projects/combat-tank-agent/submission/`.
 
 ### MPE2 Simple Spread
 

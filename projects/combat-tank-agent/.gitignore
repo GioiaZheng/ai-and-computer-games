@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+
+checkpoints/
+results/
+wandb/
+*.pt
+*.pth
+*.ckpt
+*.zip
+
+# Local experiment outputs and third-party evaluation fixtures.
+artifacts/
+experiments/
+logs/
+report/qa-render/
+
+# Keep the selected tournament checkpoint with the public submission.
+!submission/weights.pt
