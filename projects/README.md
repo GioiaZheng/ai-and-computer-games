@@ -13,16 +13,12 @@ The two final agents preserve the instructor-specified observation wrappers and
 `Agent(env).get_action(state)` interface. They do not modify game rules,
 rendering, rewards, or evaluation timing.
 
-## Standalone Repositories
+## Consolidated Projects
 
-The imported project snapshots correspond to:
-
-- [GioiaZheng/boxing-agent](https://github.com/GioiaZheng/boxing-agent)
-- [GioiaZheng/combat-tank-agent](https://github.com/GioiaZheng/combat-tank-agent)
-
-The standalone repositories remain available for compact project presentation.
-This private repository is the complete course archive containing the agents,
-learning notes, notebooks, and practical work in one place.
+The Boxing and Combat Tank tournament agents were originally developed as
+standalone projects. Their final agents, trained weights, tests, and supporting
+documentation are now maintained here alongside the course notes, notebooks,
+and practical work.
 
 ## Attribution
 

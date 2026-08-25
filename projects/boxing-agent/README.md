@@ -1,7 +1,5 @@
 # Atari Boxing Tournament Agent
 
-[![Smoke tests](https://github.com/GioiaZheng/boxing-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/GioiaZheng/boxing-agent/actions/workflows/tests.yml)
-
 Tournament submission for the University of Eastern Finland course
 **Artificial Intelligence for Computer Games**. The agent placed **fourth** in
 the 2026 course tournament.
