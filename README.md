@@ -30,7 +30,7 @@ ai-and-computer-games/
 `-- README.md
 ```
 
-This private repository tracks project code, bilingual lecture notes, course
+This repository tracks project code, bilingual lecture notes, course
 notebooks, both tournament agents, and the team-authored Combat Tank report.
 Raw course materials, intermediate checkpoints, experiment results, W&B runs,
 and third-party agents remain excluded from version control.
