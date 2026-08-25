@@ -1,0 +1,1 @@
+"""Pommerman training package."""

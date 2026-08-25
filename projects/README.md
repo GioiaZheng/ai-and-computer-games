@@ -8,6 +8,7 @@ developed during **Artificial Intelligence for Computer Games**.
 | `boxing-dqn` | PettingZoo Atari Boxing | Double-Dueling DQN and self-play | Training and evaluation code |
 | `boxing-agent` | PettingZoo Atari Boxing | Shared-role Double-Dueling DQN | Exact tournament agent and weights |
 | `combat-tank-agent` | PettingZoo Atari Combat Tank | Behavioral cloning, exploration curriculum, and role-specialized PPO | Training code, report, and final agent |
+| `pommerman-agent` | Pommerman FFA | SimpleAgent behavioral cloning and PPO | Four-spawn training and evaluation code |
 
 The two final agents preserve the instructor-specified observation wrappers and
 `Agent(env).get_action(state)` interface. They do not modify game rules,
@@ -19,6 +20,11 @@ The Boxing and Combat Tank tournament agents were originally developed as
 standalone projects. Their final agents, trained weights, tests, and supporting
 documentation are now maintained here alongside the course notes, notebooks,
 and practical work.
+
+The Pommerman project is an independent extension based on the Apache-2.0
+[MultiAgentLearning/playground](https://github.com/MultiAgentLearning/playground)
+environment and inspired by the learning approach documented in
+[eugene/pommerman](https://github.com/eugene/pommerman).
 
 ## Attribution
 

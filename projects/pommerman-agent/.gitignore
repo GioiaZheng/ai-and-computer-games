@@ -1,0 +1,7 @@
+.vendor/
+checkpoints/
+results/
+runs/
+*.pt
+*.pth
+*.npz
