@@ -183,6 +183,22 @@ python src/ppo_boxing.py \
   --output checkpoints/ppo_pool_300000
 ```
 
+For a random-opponent phase, CPU environment simulation can run in parallel:
+
+```bash
+python src/ppo_boxing.py \
+  --resume checkpoints/ppo_pool_300000.zip \
+  --external-probability 0 \
+  --vec-env subproc \
+  --n-envs 6 \
+  --entropy-coefficient 0.002 \
+  --timesteps 700000 \
+  --output checkpoints/ppo_random_1m
+```
+
+External PyTorch opponents stay on `--vec-env dummy` so CUDA models are not
+created inside environment subprocesses.
+
 ## Algorithm
 
 The learner combines:
