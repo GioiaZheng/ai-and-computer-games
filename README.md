@@ -13,6 +13,10 @@ The practical setup follows the instructor-provided repository:
 
 This is an independent course-work repository, not a fork of the instructor repository.
 
+The tournament projects were completed as team coursework. Their component
+READMEs and reports name the team members; this repository does not present the
+team outputs as sole-authored work.
+
 ## Repository Layout
 
 ```text
@@ -35,6 +39,17 @@ This repository tracks project code, bilingual lecture notes, course
 notebooks, both tournament agents, and the team-authored Combat Tank report.
 Raw course materials, intermediate checkpoints, experiment results, W&B runs,
 and third-party agents remain excluded from version control.
+
+## Selected Outcomes
+
+| Project | Published evidence | Scope |
+| --- | --- | --- |
+| [Atari Boxing](projects/boxing-agent) | Submitted checkpoint, inference package, method notes, and smoke tests; fourth place in the 2026 course tournament | Team coursework |
+| [Atari Combat Tank](projects/combat-tank-agent) | Training and evaluation code, role-specialized submission weights, held-out score figures, and [final report](projects/combat-tank-agent/report/Ali0x01_combat_tank_report.pdf) | Team final project |
+
+The commit history records how this public repository was assembled and
+maintained, but it is not used as evidence of the internal division of work
+within the teams.
 
 ## Projects
 
