@@ -9,6 +9,17 @@ through all four spawn positions.
 `SimpleAgent`，让网络学会基本移动、放置炸弹与躲避；随后在四个出生位置轮换，
 使用 PPO 对抗随机与规则智能体。
 
+## Maintenance Status
+
+This directory is preserved as a legacy coursework and reproducibility
+artifact. Its tested setup intentionally pins Python 3.8 and an older
+Pommerman/Gym dependency stack; Python 3.8 and several pinned packages are no
+longer supported upstream. The environment is not maintained for production
+use or for processing untrusted inputs. Reproducing the historical experiment
+should be done in an isolated environment. A supported upgrade requires a
+coordinated Python and dependency migration with end-to-end validation rather
+than independent package updates.
+
 ## Sources and Attribution
 
 - [eugene/pommerman](https://github.com/eugene/pommerman) motivated the
